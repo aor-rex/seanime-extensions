@@ -65,6 +65,15 @@ class Provider {
         return opts.query || opts.media.englishTitle || opts.media.romajiTitle || ""
     }
 
+    // apibay tokenizes queries and treats a standalone hyphen (surrounded by
+    // whitespace) as a negation operator: "Show - The Movie" excludes "The
+    // Movie" from results. AniList titles routinely contain " - " (e.g. "BLEACH:
+    // Thousand-Year Blood War - The Calamity"), so normalize it away. Hyphens
+    // inside words ("Thousand-Year") are left untouched.
+    private sanitize(q: string): string {
+        return q.replace(/\s+-\s+/g, " ").replace(/\s+/g, " ").trim()
+    }
+
     private catsFor(media: Media): string {
         return this.isMovie(media) ? this.MOVIE_CATS.join(",") : this.SERIES_CATS.join(",")
     }
@@ -73,7 +82,14 @@ class Provider {
         return [...this.SERIES_CATS, ...this.MOVIE_CATS].includes(Number(cat))
     }
 
-    private toAnimeTorrent(t: TpbTorrent): AnimeTorrent {
+    private isBatchName(name: string): boolean {
+        if (/(^|\b)(batch|complete)(\b|$)/i.test(name)) return true
+        if (/\bS\d{1,2}(?![\dE])/i.test(name)) return true
+        // Episode-range batches like "1-64" or "001-008"
+        return /\b\d{1,3}\s*-\s*\d{1,3}\b/.test(name)
+    }
+
+    private toAnimeTorrent(t: TpbTorrent, confirmed = true): AnimeTorrent {
         const infoHash = t.info_hash || null
         return {
             name: t.name,
@@ -88,11 +104,11 @@ class Provider {
             magnetLink: infoHash ? this.buildMagnet(infoHash, t.name) : null,
             infoHash: infoHash,
             resolution: this.extractResolution(t.name),
-            isBatch: /(^|\b)(batch|complete)(\b|$)/i.test(t.name) || /\bS\d{1,2}(?![\dE])/i.test(t.name),
+            isBatch: this.isBatchName(t.name),
             episodeNumber: this.episodeOf(t.name),
             releaseGroup: "",
             isBestRelease: false,
-            confirmed: true,
+            confirmed: confirmed,
         }
     }
 
@@ -100,6 +116,8 @@ class Provider {
     private episodeOf(name: string): number {
         const m = name.match(/\bS\d{1,2}E(\d{1,3})\b/i)
         if (m) return Number(m[1])
+        const ep = name.match(/\b(?:Episode|EP)\s*#?\s*(\d{1,3})\b/i)
+        if (ep) return Number(ep[1])
         const single = name.match(/(?:^|[.\s-])E(\d{1,3})(?:[.\s-]|$)/i)
         return single ? Number(single[1]) : -1
     }
@@ -118,26 +136,27 @@ class Provider {
         }
     }
 
-    private mergeDedup(a: TpbTorrent[], b: TpbTorrent[]): TpbTorrent[] {
-        const seen = new Set<string>()
-        return [...a, ...b].filter((t) => {
-            if (seen.has(t.info_hash)) return false
-            seen.add(t.info_hash)
-            return true
-        })
-    }
-
     // ------------------------------------------------------------------ API
 
     async search(opts: AnimeSearchOptions): Promise<AnimeTorrent[]> {
-        const q = opts.query || opts.media.englishTitle || opts.media.romajiTitle || ""
+        const q = this.sanitize(opts.query || opts.media.englishTitle || opts.media.romajiTitle || "")
+        if (q.trim() === "") return []
         let torrents = await this.searchQuery(q, this.catsFor(opts.media))
         if (torrents.length === 0) torrents = await this.searchQuery(q)
         return torrents.map((t) => this.toAnimeTorrent(t))
     }
 
+    // apibay tokenizes queries and requires every token to appear in the torrent
+    // name. Resolution values come in as "1080"/"720" (no "p"), which can't match
+    // the "1080p" token in torrent names, so append the "p".
+    private resolutionToken(res: string): string {
+        if (/^\d{3,4}$/.test(res)) return `${res}p`
+        return res
+    }
+
     async smartSearch(opts: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
-        let q = this.baseTitle(opts)
+        const base = this.sanitize(this.baseTitle(opts))
+        let q = base
 
         if (this.isMovie(opts.media)) {
             if (opts.media.seasonYear) q += ` ${opts.media.seasonYear}`
@@ -147,20 +166,44 @@ class Provider {
             q += ` S01E${String(opts.episodeNumber).padStart(2, "0")}`
         }
 
-        if (opts.resolution) q += ` ${opts.resolution}`
-        if (q.trim() === "") return []
+        const resToken = opts.resolution ? this.resolutionToken(opts.resolution) : ""
+        if (resToken) q += ` ${resToken}`
+        q = this.sanitize(q)
+        if (q === "") return []
 
         let torrents = await this.searchQuery(q, this.catsFor(opts.media))
         if (torrents.length === 0) torrents = await this.searchQuery(q)
 
+        // Batch search: apibay rarely has a "complete" or "season" token, so the
+        // precise query often comes back empty. Fall back to a title-only query
+        // and keep anything that looks like a batch.
         if (opts.batch) {
-            const seasonQ = `${this.baseTitle(opts)} season${opts.resolution ? ` ${opts.resolution}` : ""}`
-            let more = await this.searchQuery(seasonQ, this.catsFor(opts.media))
-            if (more.length === 0) more = await this.searchQuery(seasonQ)
-            torrents = this.mergeDedup(torrents, more)
+            if (torrents.length === 0) {
+                let fb = base
+                if (resToken) fb += ` ${resToken}`
+                let fbTorrents = await this.searchQuery(fb, this.catsFor(opts.media))
+                if (fbTorrents.length === 0) fbTorrents = await this.searchQuery(fb)
+                torrents = fbTorrents.filter((t) => this.isBatchName(t.name))
+            }
+            return torrents.map((t) => this.toAnimeTorrent(t, true))
         }
 
-        return torrents.map((t) => this.toAnimeTorrent(t))
+        // Single-episode search: apibay requires all query tokens to match, so a
+        // "S01E01" suffix rarely matches real torrent names (season offsets,
+        // absolute episode numbers, etc.). Fall back to a title-only query and
+        // keep batches + torrents that parse to the requested episode.
+        if (opts.episodeNumber > 0 && torrents.length === 0) {
+            let fb = base
+            if (resToken) fb += ` ${resToken}`
+            let fbTorrents = await this.searchQuery(fb, this.catsFor(opts.media))
+            if (fbTorrents.length === 0) fbTorrents = await this.searchQuery(fb)
+            torrents = fbTorrents.filter(
+                (t) => this.isBatchName(t.name) || this.episodeOf(t.name) === opts.episodeNumber,
+            )
+            return torrents.map((t) => this.toAnimeTorrent(t, false))
+        }
+
+        return torrents.map((t) => this.toAnimeTorrent(t, true))
     }
 
     async getTorrentInfoHash(torrent: AnimeTorrent): Promise<string> {
