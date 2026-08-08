@@ -2,7 +2,6 @@
 /// <reference path="../core.d.ts" />
 
 const TORRENTIO_BASE = "https://torrentio.strem.fun"
-const DEFAULT_CONFIG = "sort=qualitysize|qualityfilter=cam,scr,unknown"
 const ARM_API = "https://arm.haglund.dev/api/v2/ids"
 const YUNA_API = "https://relations.yuna.moe/api/ids"
 const WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
@@ -267,12 +266,38 @@ class Provider {
     }
 
     private getConfigSegment(): string {
-        const preset = ($getUserPreference("torrentioPreset") || "").trim()
-        if (preset === "__none__") return ""
-        const custom = ($getUserPreference("torrentioConfig") || "").trim()
-        let seg = preset
-        if (!seg) seg = custom
-        if (!seg) seg = DEFAULT_CONFIG
+        // Mirrors Torrentio's generateLink() (landingTemplate.js): emits
+        // key=value pairs in the official order, dropping empty/default values.
+        const split = (v: string | undefined): string[] => (v || "").split(",").map(x => x.trim()).filter(x => x.length > 0)
+
+        const sort = ($getUserPreference("torrentioSort") || "").trim()
+        const limit = ($getUserPreference("torrentioLimit") || "").trim()
+        const language = split($getUserPreference("torrentioLanguage")).join(",")
+        const qualityfilter = split($getUserPreference("torrentioQualityfilter")).join(",")
+        const sizefilter = ($getUserPreference("torrentioSizefilter") || "").trim()
+        const providers = split($getUserPreference("torrentioProviders")).join(",")
+        const debrid = ($getUserPreference("torrentioDebrid") || "none").trim()
+        const debridKey = ($getUserPreference("torrentioDebridKey") || "").trim()
+
+        const configMap: Array<[string, string]> = [
+            ["providers", providers],
+            ["sort", sort !== "quality" ? sort : ""],
+            ["language", language],
+            ["qualityfilter", qualityfilter],
+            ["limit", /^[1-9][0-9]{0,2}$/.test(limit) ? limit : ""],
+            ["sizefilter", sizefilter],
+            ["debridoptions", ""],
+        ]
+        if (debrid === "putio") {
+            if (debridKey.includes("@")) configMap.push(["putio", debridKey])
+        } else if (debrid !== "none" && debridKey) {
+            configMap.push([debrid, debridKey])
+        }
+
+        const seg = configMap
+            .filter(([k, v]) => v && v.length > 0 && k !== "none")
+            .map(([k, v]) => k + "=" + v)
+            .join("|")
         return seg.replace(/\|/g, "%7C")
     }
 

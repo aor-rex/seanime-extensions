@@ -1,7 +1,7 @@
 {
   "id": "torrentio",
   "name": "Torrentio",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
@@ -10,28 +10,72 @@
   "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/icon.png",
   "lang": "multi",
   "userConfig": {
-    "version": 1,
+    "version": 2,
     "requiresConfig": false,
     "fields": [
       {
         "type": "select",
-        "name": "torrentioPreset",
-        "label": "Config preset",
-        "default": "",
+        "name": "torrentioSort",
+        "label": "Sorting",
+        "default": "quality",
         "options": [
-          { "label": "Custom (use field below)", "value": "" },
-          { "label": "Default: sort by quality, exclude cam/scr/unknown", "value": "sort=qualitysize|qualityfilter=cam,scr,unknown" },
-          { "label": "Sort by seeders", "value": "sort=seeders" },
-          { "label": "Exclude cam/scr/unknown", "value": "qualityfilter=cam,scr,unknown" },
-          { "label": "Max size 3GB", "value": "sizefilter=3GB" },
-          { "label": "Seeders + max size 3GB", "value": "sort=seeders|sizefilter=3GB" },
-          { "label": "No config (show all streams)", "value": "__none__" }
+          { "label": "By quality then seeders", "value": "quality" },
+          { "label": "By quality then size", "value": "qualitysize" },
+          { "label": "By seeders", "value": "seeders" },
+          { "label": "By size", "value": "size" }
         ]
       },
       {
         "type": "text",
-        "name": "torrentioConfig",
-        "label": "Custom options (advanced) - e.g. sort=seeders|sizefilter=3GB|minfilesize=100MB|limit=10",
+        "name": "torrentioLimit",
+        "label": "Max Results per Quality (1-999, empty = all results)",
+        "default": ""
+      },
+      {
+        "type": "text",
+        "name": "torrentioLanguage",
+        "label": "Priority Language (comma separated, e.g. japanese, russian, latino)",
+        "default": ""
+      },
+      {
+        "type": "text",
+        "name": "torrentioQualityfilter",
+        "label": "Exclude Resolutions (comma separated: brremux,hdrall,dolbyvision,dolbyvisionwithhdr,threed,nonthreed,4k,1080p,720p,480p,other,scr,cam,unknown)",
+        "default": ""
+      },
+      {
+        "type": "text",
+        "name": "torrentioSizefilter",
+        "label": "Video Size Limit (e.g. 2GB, 500MB; comma = movies,series)",
+        "default": ""
+      },
+      {
+        "type": "text",
+        "name": "torrentioProviders",
+        "label": "Providers (comma separated, empty = all, e.g. 1337x, nyaasi, thepiratebay)",
+        "default": ""
+      },
+      {
+        "type": "select",
+        "name": "torrentioDebrid",
+        "label": "Debrid Provider",
+        "default": "none",
+        "options": [
+          { "label": "None", "value": "none" },
+          { "label": "RealDebrid", "value": "realdebrid" },
+          { "label": "Premiumize", "value": "premiumize" },
+          { "label": "AllDebrid", "value": "alldebrid" },
+          { "label": "DebridLink", "value": "debridlink" },
+          { "label": "EasyDebrid", "value": "easydebrid" },
+          { "label": "OffCloud", "value": "offcloud" },
+          { "label": "TorBox", "value": "torbox" },
+          { "label": "Putio", "value": "putio" }
+        ]
+      },
+      {
+        "type": "text",
+        "name": "torrentioDebridKey",
+        "label": "Debrid API Key (putio: clientId@token)",
         "default": ""
       }
     ]
