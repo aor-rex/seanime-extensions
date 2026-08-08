@@ -19,6 +19,7 @@ Personal fork of [`dot-fx/seanime-extensions`](https://github.com/dot-fx/seanime
 | `YTS` | torrent provider | Movies only (720p/1080p/4K); uses the YTS JSON API. |
 | `EZTV` | torrent provider | Series episodes; magnets come straight from the search page. |
 | `EXT` | torrent provider | EXT Torrents (`extto.com`) HTML scrape; signed per-request magnet links. |
+| `Torrentio` | torrent provider | Streams via `torrentio.strem.fun`; `type: special` (search-only). Fork of `Crashdaemon/Seanime-Torrentio`. Resolves AniList IDs via ARM/YUNA, plus a fallback for **TMDB custom-source** media: decodes the synthetic ID, maps TMDB → IMDb via Wikidata, and queries Torrentio by IMDb. Stremio-catalog media (FNV-1a hash IDs) are **not** resolvable. |
 
 The bundled `anime-torrent-provider.d.ts` / `core.d.ts` were added (they're missing from upstream) and lightly patched:
 - `AnimeTorrent.magnetLink` / `infoHash` now allow `null`.
