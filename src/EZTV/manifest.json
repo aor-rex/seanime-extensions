@@ -1,0 +1,13 @@
+{
+  "id": "eztv",
+  "name": "EZTV",
+  "version": "1.0.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EZTV/manifest.json",
+  "language": "typescript",
+  "type": "anime-torrent-provider",
+  "description": "EZTV torrent provider for TV series episodes (SxxExx).",
+  "author": "aor-rex",
+  "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EZTV/icon.png",
+  "lang": "en",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EZTV/main.ts"
+}

@@ -1,0 +1,28 @@
+{
+  "id": "tmdb",
+  "name": "TMDB",
+  "version": "1.1.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TMDB/manifest.json",
+  "language": "typescript",
+  "type": "custom-source",
+  "description": "Implements TMDb as a custom source with per-season media entries.",
+  "author": "aor-rex",
+  "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TMDB/icon.png",
+  "website": "https://github.com/aor-rex/seanime-extensions",
+  "readme": "",
+  "lang": "multi",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TMDB/main.ts",
+  "isDevelopment": false,
+  "userConfig": {
+    "requiresConfig": true,
+    "version": 1,
+    "fields": [
+      {
+        "name": "api-key",
+        "label": "TMDB API Key",
+        "type": "text",
+        "default": ""
+      }
+    ]
+  }
+}

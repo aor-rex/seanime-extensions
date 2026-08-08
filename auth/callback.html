@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SIMKL Auth Helper · Seanime</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262b36;
+    --text: #e8eaf0;
+    --muted: #9aa3b2;
+    --accent: #6c5ce7;
+    --accent-hover: #7d6ff0;
+    --green: #2ecc71;
+    --red: #e74c3c;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 50% -10%, #1b2030 0%, var(--bg) 60%);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    width: 100%;
+    max-width: 560px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0 0 24px; font-size: 14px; line-height: 1.5; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 16px 0 6px; }
+  input[type="text"] {
+    width: 100%;
+    padding: 11px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  input[type="text"]:focus { outline: none; border-color: var(--accent); }
+  button {
+    margin-top: 16px;
+    width: 100%;
+    padding: 12px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:hover { background: var(--accent-hover); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .step { display: none; }
+  .step.active { display: block; }
+  .pin {
+    font-size: 42px;
+    font-weight: 800;
+    letter-spacing: 8px;
+    text-align: center;
+    background: var(--bg);
+    border: 1px dashed var(--accent);
+    border-radius: var(--radius);
+    padding: 20px 12px;
+    margin: 20px 0;
+    user-select: all;
+  }
+  a.link {
+    display: inline-block;
+    margin-top: 4px;
+    color: var(--accent-hover);
+    text-decoration: none;
+    font-weight: 600;
+  }
+  .status { margin-top: 16px; font-size: 13px; color: var(--muted); min-height: 18px; text-align: center; }
+  .token-box {
+    margin-top: 16px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    color: var(--green);
+    max-height: 160px;
+    overflow: auto;
+  }
+  .error { color: var(--red); }
+  .ok { color: var(--green); }
+  ol.steps { padding-left: 18px; color: var(--muted); font-size: 13px; line-height: 1.8; }
+  a.doc { color: var(--accent-hover); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>SIMKL Auth Helper</h1>
+    <p class="sub">
+      Generates an <b>access token</b> for the Seanime SIMKL extension. This uses SIMKL's PIN flow —
+      no redirect URI or secret required. You only need your <b>Client ID</b>.
+    </p>
+
+    <div class="step active" id="step-1">
+      <label for="clientId">Client ID (API key)</label>
+      <input type="text" id="clientId" placeholder="e.g. c7be48f1559a6d794w19..." autocomplete="off" />
+      <p class="sub" style="margin-top:10px;">
+        Don't have one? Create a free app at
+        <a class="doc" href="https://simkl.com/settings/developer/" target="_blank" rel="noopener">simkl.com/settings/developer</a>.
+      </p>
+      <button id="startBtn">Start</button>
+      <div class="status" id="status1"></div>
+    </div>
+
+    <div class="step" id="step-2">
+      <p class="sub">Enter this PIN on the SIMKL site, then wait here. It's valid for 15 minutes.</p>
+      <div class="pin" id="pinCode">·····</div>
+      <p style="text-align:center;margin:0;">
+        <a class="link" id="verifyLink" href="https://simkl.com/pin/" target="_blank" rel="noopener">Open simkl.com/pin →</a>
+      </p>
+      <div class="status" id="status2">Waiting for authorization...</div>
+    </div>
+
+    <div class="step" id="step-3">
+      <p class="sub ok">Authorized! Copy your access token:</p>
+      <div class="token-box" id="tokenBox"></div>
+      <label>How to use</label>
+      <ol class="steps">
+        <li>In Seanime, open the <b>Simkl</b> extension settings.</li>
+        <li>Paste your <b>Client ID</b> into the <b>Client ID</b> field.</li>
+        <li>Paste this <b>Access Token</b> into the <b>Access Token</b> field.</li>
+        <li>Save. Your SIMKL watchlist will now appear in the library.</li>
+      </ol>
+      <button id="copyBtn">Copy token</button>
+      <div class="status" id="status3"></div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+  var PIN_API = "https://api.simkl.com/oauth/pin";
+  var clientId = "";
+  var userCode = "";
+  var deviceCode = "";
+  var intervalSec = 5;
+  var expiresIn = 900;
+  var pollTimer = null;
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function show(stepId) {
+    ["step-1", "step-2", "step-3"].forEach(function (id) {
+      $(id).classList.toggle("active", id === stepId);
+    });
+  }
+
+  function setStatus(elId, msg, isError) {
+    var el = $(elId);
+    el.textContent = msg;
+    el.classList.remove("ok", "error");
+    if (isError === true) el.classList.add("error");
+    else if (msg) el.classList.add("ok");
+  }
+
+  async function requestDeviceCode() {
+    var res = await fetch(PIN_API + "?client_id=" + encodeURIComponent(clientId));
+    if (!res.ok) throw new Error("HTTP " + res.status + " — check your Client ID");
+    return res.json();
+  }
+
+  async function poll() {
+    try {
+      var res = await fetch(PIN_API + "/" + encodeURIComponent(userCode) + "?client_id=" + encodeURIComponent(clientId));
+      if (!res.ok) throw new Error("Polling failed (HTTP " + res.status + ")");
+      var data = await res.json();
+
+      if (data && data.result === "OK" && data.access_token) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        $("tokenBox").textContent = data.access_token;
+        show("step-3");
+        return;
+      }
+      if (data && data.result === "KO" && data.message === "Slow down") {
+        setStatus("status2", "Waiting for authorization...");
+      } else {
+        setStatus("status2", "Waiting for authorization...");
+      }
+    } catch (e) {
+      setStatus("status2", "Polling error: " + e.message, true);
+    }
+  }
+
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+
+  $("startBtn").addEventListener("click", async function () {
+    clientId = $("clientId").value.trim();
+    if (!clientId) {
+      setStatus("status1", "Please enter your Client ID.", true);
+      return;
+    }
+    setStatus("status1", "Requesting PIN...");
+    $("startBtn").disabled = true;
+    try {
+      var data = await requestDeviceCode();
+      if (!data || !data.user_code) {
+        throw new Error("Invalid response from SIMKL");
+      }
+      userCode = data.user_code;
+      deviceCode = data.device_code || "";
+      intervalSec = data.interval || 5;
+      expiresIn = data.expires_in || 900;
+      $("pinCode").textContent = userCode;
+      show("step-2");
+      setStatus("status2", "Enter the PIN at simkl.com/pin — valid for " + Math.round(expiresIn / 60) + " min");
+      pollTimer = setInterval(poll, intervalSec * 1000);
+    } catch (e) {
+      setStatus("status1", "Error: " + e.message, true);
+      $("startBtn").disabled = false;
+    }
+  });
+
+  $("copyBtn").addEventListener("click", async function () {
+    var token = $("tokenBox").textContent;
+    try {
+      await navigator.clipboard.writeText(token);
+      setStatus("status3", "Copied to clipboard!");
+    } catch (e) {
+      window.getSelection().selectAllChildren($("tokenBox"));
+      setStatus("status3", "Copy failed — select the text manually.");
+    }
+  });
+
+  window.addEventListener("beforeunload", stopPolling);
+})();
+</script>
+</body>
+</html>

@@ -65,6 +65,19 @@ class Provider {
         return opts.query || opts.media.englishTitle || opts.media.romajiTitle || ""
     }
 
+    // Splits a per-season media title like "Breaking Bad — Season 2" into its
+    // base title and season number. Returns season 0 when no marker is present.
+    private splitSeason(title: string): { base: string; season: number } {
+        const m = title.match(/\s*[—–-]\s*season\s+(\d{1,2})\s*$/i)
+        if (m) {
+            return {
+                base: title.slice(0, m.index).trim(),
+                season: Number(m[1]),
+            }
+        }
+        return { base: title.trim(), season: 0 }
+    }
+
     // apibay tokenizes queries and treats a standalone hyphen (surrounded by
     // whitespace) as a negation operator: "Show - The Movie" excludes "The
     // Movie" from results. AniList titles routinely contain " - " (e.g. "BLEACH:
@@ -122,6 +135,23 @@ class Provider {
         return single ? Number(single[1]) : -1
     }
 
+    // Parses the season from a torrent name ("S05E08" -> 5). Returns 0 if none.
+    private seasonOf(name: string): number {
+        const m = name.match(/\bS(\d{1,2})E\d{1,3}\b/i)
+        return m ? Number(m[1]) : 0
+    }
+
+    // True when the torrent name matches the requested (relative) episode number
+    // for the given season. A torrent with an explicit season marker must match
+    // that season; torrents without one (absolute numbering, etc.) only need to
+    // match the episode number.
+    private matchesEpisode(name: string, episodeNumber: number, season: number): boolean {
+        if (this.episodeOf(name) !== episodeNumber) return false
+        if (season <= 0) return true
+        const s = this.seasonOf(name)
+        return s === 0 || s === season
+    }
+
     private async searchQuery(q: string, cat?: string): Promise<TpbTorrent[]> {
         try {
             let url = `${this.api}/q.php?q=${encodeURIComponent(q)}`
@@ -139,7 +169,8 @@ class Provider {
     // ------------------------------------------------------------------ API
 
     async search(opts: AnimeSearchOptions): Promise<AnimeTorrent[]> {
-        const q = this.sanitize(opts.query || opts.media.englishTitle || opts.media.romajiTitle || "")
+        const split = this.splitSeason(opts.query || opts.media.englishTitle || opts.media.romajiTitle || "")
+        const q = this.sanitize(split.base)
         if (q.trim() === "") return []
         let torrents = await this.searchQuery(q, this.catsFor(opts.media))
         if (torrents.length === 0) torrents = await this.searchQuery(q)
@@ -155,7 +186,9 @@ class Provider {
     }
 
     async smartSearch(opts: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
-        const base = this.sanitize(this.baseTitle(opts))
+        const split = this.splitSeason(this.sanitize(this.baseTitle(opts)))
+        const base = split.base
+        const season = split.season
         let q = base
 
         if (this.isMovie(opts.media)) {
@@ -163,7 +196,8 @@ class Provider {
         } else if (opts.batch) {
             q += " complete"
         } else if (opts.episodeNumber > 0) {
-            q += ` S01E${String(opts.episodeNumber).padStart(2, "0")}`
+            const s = season > 0 ? season : 1
+            q += ` S${String(s).padStart(2, "0")}E${String(opts.episodeNumber).padStart(2, "0")}`
         }
 
         const resToken = opts.resolution ? this.resolutionToken(opts.resolution) : ""
@@ -189,16 +223,16 @@ class Provider {
         }
 
         // Single-episode search: apibay requires all query tokens to match, so a
-        // "S01E01" suffix rarely matches real torrent names (season offsets,
+        // "SxxEyy" suffix rarely matches real torrent names (season offsets,
         // absolute episode numbers, etc.). Fall back to a title-only query and
-        // keep batches + torrents that parse to the requested episode.
+        // keep batches + torrents that parse to the requested season/episode.
         if (opts.episodeNumber > 0 && torrents.length === 0) {
             let fb = base
             if (resToken) fb += ` ${resToken}`
             let fbTorrents = await this.searchQuery(fb, this.catsFor(opts.media))
             if (fbTorrents.length === 0) fbTorrents = await this.searchQuery(fb)
             torrents = fbTorrents.filter(
-                (t) => this.isBatchName(t.name) || this.episodeOf(t.name) === opts.episodeNumber,
+                (t) => this.isBatchName(t.name) || this.matchesEpisode(t.name, opts.episodeNumber, season),
             )
             return torrents.map((t) => this.toAnimeTorrent(t, false))
         }

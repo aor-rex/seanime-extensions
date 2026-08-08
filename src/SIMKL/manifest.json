@@ -1,24 +1,30 @@
 {
   "id": "simkl",
   "name": "Simkl",
-  "version": "1.1.2",
-  "manifestURI": "https://raw.githubusercontent.com/dot-fx/seanime-extensions/master/src/SIMKL/manifest.json",
+  "version": "2.1.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/manifest.json",
   "language": "typescript",
   "type": "custom-source",
-  "description": "Implements SIMKL as a custom source.",
-  "author": "jabifx",
-  "icon": "https://raw.githubusercontent.com/dot-fx/seanime-extensions/master/src/SIMKL/icon.ico",
-  "website": "",
+  "description": "Implements SIMKL as a custom source with watchlist support.",
+  "author": "aor-rex",
+  "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/icon.ico",
+  "website": "https://github.com/aor-rex/seanime-extensions",
   "lang": "multi",
-  "payloadURI": "https://raw.githubusercontent.com/dot-fx/seanime-extensions/master/src/SIMKL/main.ts",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/main.ts",
   "isDevelopment": false,
   "userConfig": {
     "requiresConfig": true,
     "version": 1,
     "fields": [
       {
-        "name": "api-key",
-        "label": "API KEY",
+        "name": "client-id",
+        "label": "Client ID (API key)",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "access-token",
+        "label": "Access Token (optional, enables your watchlist)",
         "type": "text",
         "default": ""
       }
