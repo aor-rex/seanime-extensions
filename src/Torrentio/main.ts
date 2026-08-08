@@ -5,6 +5,7 @@ const TORRENTIO_BASE = "https://torrentio.strem.fun"
 const ARM_API = "https://arm.haglund.dev/api/v2/ids"
 const YUNA_API = "https://relations.yuna.moe/api/ids"
 const WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
+const TMDB_API = "https://api.themoviedb.org/3"
 
 interface TorrentioStream {
     name: string
@@ -208,7 +209,7 @@ async function tmdbToImdb(tmdbId: number, isMovie: boolean): Promise<string> {
             WIKIDATA_SPARQL + "?query=" + encodeURIComponent(query) + "&format=json",
             {
                 timeout: 15,
-                headers: { Accept: "application/sparql-results+json", "User-Agent": "seanime-torrentio/0.1.3" },
+                headers: { Accept: "application/sparql-results+json", "User-Agent": "seanime-torrentio/0.1.9" },
             }
         )
         if (!res.ok) return ""
@@ -309,10 +310,139 @@ class Provider {
             }
         }
 
+        // Fallback for brand-new series/movies that no mapping API has indexed
+        // yet (ARM/YUNA/AniZip/Wikidata all return nothing for them). When the
+        // user supplies an optional TMDB API key, search TMDB by title and map
+        // the best hit to its IMDb ID so Torrentio can be queried directly.
+        if (!resolved.kitsuId && !resolved.imdbId) {
+            const tmdbResolved = await this.resolveViaTmdb(media)
+            if (tmdbResolved.imdbId) {
+                resolved.imdbId = tmdbResolved.imdbId
+                if (tmdbResolved.tmdbSeason && tmdbResolved.tmdbSeason > 0) {
+                    resolved.tmdbSeason = tmdbResolved.tmdbSeason
+                }
+            }
+        }
+
         if (resolved.kitsuId || resolved.imdbId) {
             this.cache[media.id] = resolved
         }
         return resolved
+    }
+
+    // Title-based TMDB fallback used when ARM/YUNA and the encoded-ID path all
+    // fail to resolve a media. Requires an optional torrentioTmdbApiKey.
+    // Returns {} (with no IMDb id) when no key is set or nothing matches.
+    private async resolveViaTmdb(media: Media): Promise<ResolvedIds> {
+        const key = ($getUserPreference("torrentioTmdbApiKey") || "").trim()
+        if (!key) return {}
+
+        const isMovie = media.format === "MOVIE"
+        const titles: string[] = []
+        if (media.englishTitle) titles.push(media.englishTitle)
+        if (media.romajiTitle) titles.push(media.romajiTitle)
+        if (media.synonyms && Array.isArray(media.synonyms)) {
+            for (let i = 0; i < media.synonyms.length; i++) titles.push(media.synonyms[i])
+        }
+        const unique: string[] = []
+        const seenTitles: { [k: string]: boolean } = {}
+        for (let i = 0; i < titles.length; i++) {
+            const t = (titles[i] || "").trim()
+            if (!t || seenTitles[t]) continue
+            seenTitles[t] = true
+            unique.push(t)
+        }
+
+        const type = isMovie ? "movie" : "tv"
+        for (let i = 0; i < unique.length; i++) {
+            const title = unique[i]
+            let url = TMDB_API + "/search/" + type + "?api_key=" + encodeURIComponent(key) +
+                "&language=en-US&query=" + encodeURIComponent(title)
+            if (media.seasonYear && !isMovie) {
+                url += "&first_air_date_year=" + media.seasonYear
+            }
+            if (isMovie && media.seasonYear) {
+                url += "&year=" + media.seasonYear
+            }
+            try {
+                const res = await fetch(url, { timeout: 15 })
+                if (!res.ok) continue
+                const data = res.json<any>()
+                const results = (data && Array.isArray(data.results)) ? data.results : []
+                if (results.length === 0) continue
+
+                // Pick the best result: prefer a year match, else the first hit.
+                let best = results[0]
+                let bestScore = -1
+                for (let j = 0; j < results.length; j++) {
+                    const r = results[j]
+                    let score = 0
+                    if (media.seasonYear) {
+                        const aired = r && (r.first_air_date || r.release_date || "")
+                        const year = aired ? parseInt(aired.slice(0, 4), 10) : 0
+                        if (year === media.seasonYear) score += 3
+                    }
+                    const hitTitle = (r && (r.name || r.title || "") || "").toLowerCase()
+                    const q = title.toLowerCase()
+                    if (hitTitle === q) score += 2
+                    else if (hitTitle.indexOf(q) !== -1) score += 1
+                    if (score > bestScore) {
+                        bestScore = score
+                        best = r
+                    }
+                }
+                if (!best || !best.id) continue
+
+                // Map TMDB id -> IMDb id via external_ids (no Wikidata needed).
+                const extUrl = TMDB_API + "/" + type + "/" + best.id +
+                    "/external_ids?api_key=" + encodeURIComponent(key)
+                const extRes = await fetch(extUrl, { timeout: 15 })
+                if (!extRes.ok) continue
+                const ext = extRes.json<any>()
+                if (!ext || !ext.imdb_id) continue
+
+                const out: ResolvedIds = { imdbId: ext.imdb_id }
+
+                // Determine the season number from the TMDB detail page by
+                // matching the anime's season year to a season's air date.
+                if (!isMovie) {
+                    let season = 1
+                    try {
+                        const detUrl = TMDB_API + "/tv/" + best.id +
+                            "?api_key=" + encodeURIComponent(key) + "&language=en-US"
+                        const detRes = await fetch(detUrl, { timeout: 15 })
+                        if (detRes.ok) {
+                            const det = detRes.json<any>()
+                            const seasons = det && Array.isArray(det.seasons) ? det.seasons : []
+                            let yearMatch: number | null = null
+                            let firstReal: number | null = null
+                            for (let k = 0; k < seasons.length; k++) {
+                                const s = seasons[k]
+                                if (!s || !s.season_number || s.season_number === 0) continue
+                                if (!firstReal) firstReal = s.season_number
+                                if (s.air_date && media.seasonYear) {
+                                    const sy = parseInt(String(s.air_date).slice(0, 4), 10)
+                                    if (sy === media.seasonYear) {
+                                        yearMatch = s.season_number
+                                        break
+                                    }
+                                }
+                            }
+                            if (yearMatch !== null) season = yearMatch
+                            else if (firstReal !== null) season = firstReal
+                        }
+                    } catch (e) {
+                        console.error("Torrentio: TMDB season lookup failed: " + errMsg(e))
+                    }
+                    out.tmdbSeason = season
+                }
+
+                return out
+            } catch (e) {
+                console.error("Torrentio: TMDB search failed: " + errMsg(e))
+            }
+        }
+        return {}
     }
 
     private getConfigSegment(): string {
