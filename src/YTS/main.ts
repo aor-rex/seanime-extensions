@@ -57,11 +57,19 @@ class Provider {
         return `magnet:?xt=urn:btih:${hash}&dn=${encodeURIComponent(name)}${tr}`
     }
 
+    // YTS returns date_uploaded as "YYYY-MM-DD HH:MM:SS"; Seanime requires RFC3339.
+    private parseDate(date: string): string {
+        if (!date) return new Date().toISOString()
+        const m = date.match(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/)
+        if (m) return `${m[1]}T${m[2]}Z`
+        return new Date().toISOString()
+    }
+
     private toAnimeTorrent(movie: YtsMovie, t: YtsTorrent): AnimeTorrent {
         const name = `${movie.title} (${movie.year}) ${t.quality} [YTS.MX]`
         return {
             name: name,
-            date: movie.date_uploaded || new Date().toISOString(),
+            date: this.parseDate(movie.date_uploaded),
             size: Number(t.size_bytes) || 0,
             formattedSize: t.size || "",
             seeders: Number(t.seeds) || 0,
