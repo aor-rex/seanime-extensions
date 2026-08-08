@@ -1,7 +1,7 @@
 {
   "id": "thepiratebay",
-  "name": "ThePiratebay",
-  "version": "3.0.2",
+  "name": "ThePirateBay V2",
+  "version": "3.0.3",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TPB/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
