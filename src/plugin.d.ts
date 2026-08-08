@@ -16,4 +16,15 @@ declare namespace $anilist {
      * Get anime by ID (resolves custom-source ids through the source extension).
      */
     function getAnime(id: number): $app.AL_BaseAnime
+
+    /**
+     * Get the user's anime collection.
+     */
+    function getAnimeCollection(cached?: boolean): $app.AL_AnimeCollection
+}
+
+declare namespace $storage {
+    function get(key: string): string
+    function set(key: string, value: string): void
+    function remove(key: string): void
 }

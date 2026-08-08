@@ -1,7 +1,7 @@
 {
   "id": "listsync",
   "name": "ListSync",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json",
   "language": "typescript",
   "type": "plugin",
@@ -16,6 +16,18 @@
     "requiresConfig": true,
     "version": 1,
     "fields": [
+      {
+        "name": "enable-sync",
+        "label": "Sync to SIMKL",
+        "type": "switch",
+        "default": "true"
+      },
+      {
+        "name": "run-backfill",
+        "label": "Sync library to SIMKL now",
+        "type": "switch",
+        "default": "false"
+      },
       {
         "name": "client-id",
         "label": "Client ID (API key)",
@@ -33,7 +45,7 @@
   "plugin": {
     "version": "1",
     "permissions": {
-      "scopes": ["anilist"],
+      "scopes": ["anilist", "storage"],
       "allow": {
         "networkAccess": {
           "allowedDomains": ["api.simkl.com"]
