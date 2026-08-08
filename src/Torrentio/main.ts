@@ -136,6 +136,21 @@ function decodeTmdbId(id: number): { tmdbId: number; season: number; isMovie: bo
     return null
 }
 
+// Seanime re-encodes custom-source media IDs before handing them to torrent
+// providers (internal/customsource/customsource.go GenerateMediaId):
+//   runtimeId = 2^31 + (extensionIdentifier << 40) + localId
+// The localId is the ID the custom source actually returned (e.g. a TMDB
+// encoded ID). Unwrap it so the TMDB fallback can decode it.
+const EXTENSION_ID_OFFSET = Math.pow(2, 31) // 2^31
+const MAX_LOCAL_ID = Math.pow(2, 40) - 1    // 40 bits
+function unwrapRuntimeId(id: number): number {
+    const numericId = Number(id)
+    if (!numericId || isNaN(numericId)) return numericId
+    if (numericId < EXTENSION_ID_OFFSET) return numericId
+    const offset = numericId - EXTENSION_ID_OFFSET
+    return offset % (MAX_LOCAL_ID + 1)
+}
+
 // Resolve a TMDB ID to an IMDb ID via Wikidata (free, keyless). P4947 = TMDB
 // movie ID, P4983 = TMDB TV series ID, P345 = IMDb ID.
 async function tmdbToImdb(tmdbId: number, isMovie: boolean): Promise<string> {
@@ -235,7 +250,7 @@ class Provider {
         // Fallback for TMDB custom-source media: ARM/YUNA can't resolve the
         // synthetic encoded ID, so decode it to a TMDB ID and map to IMDb.
         if (!resolved.kitsuId && !resolved.imdbId) {
-            const decoded = decodeTmdbId(media.id)
+            const decoded = decodeTmdbId(unwrapRuntimeId(media.id))
             if (decoded) {
                 const imdb = await tmdbToImdb(decoded.tmdbId, decoded.isMovie)
                 if (imdb) {
