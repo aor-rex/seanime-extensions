@@ -74,6 +74,46 @@ class Provider {
         return Math.round(val * (mult[unit] ?? 1))
     }
 
+    // Parses a 1337x date cell into RFC3339. Cells show relative text like
+    // "today", "yesterday", "3 hours ago" or an absolute "Aug-07-2026".
+    private parseDate(value: string): string {
+        if (!value) return new Date().toISOString()
+        const t = value.trim().toLowerCase()
+
+        if (/^today$/.test(t)) return new Date(Date.now()).toISOString()
+        if (/^yesterday$/.test(t)) return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+        const abs = t.match(/^([a-z]{3})-(\d{2})-(\d{4})$/)
+        if (abs) {
+            const months: Record<string, number> = {
+                jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+                jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+            }
+            const mon = months[abs[1]]
+            if (mon !== undefined) {
+                const d = new Date(Date.UTC(Number(abs[3]), mon, Number(abs[2])))
+                if (!isNaN(d.getTime())) return d.toISOString()
+            }
+        }
+
+        const rel = t.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/)
+        if (rel) {
+            const mult: Record<string, number> = {
+                second: 1000,
+                minute: 60 * 1000,
+                hour: 60 * 60 * 1000,
+                day: 24 * 60 * 60 * 1000,
+                week: 7 * 24 * 60 * 60 * 1000,
+                month: 30 * 24 * 60 * 60 * 1000,
+                year: 365 * 24 * 60 * 60 * 1000,
+            }
+            const ms = mult[rel[2]]
+            if (ms) return new Date(Date.now() - Number(rel[1]) * ms).toISOString()
+        }
+
+        return new Date().toISOString()
+    }
+
     private toAnimeTorrent(el: DocSelection): AnimeTorrent | null {
         const links = el.find("td.coll-1.name a")
         if (links.length() < 2) return null
@@ -89,7 +129,7 @@ class Provider {
 
         return {
             name: title,
-            date: new Date().toISOString(),
+            date: this.parseDate(el.find("td.coll-5").text().trim()),
             size: size,
             formattedSize: "",
             seeders: seeders,
