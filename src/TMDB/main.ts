@@ -12,6 +12,9 @@
 // season, so per-episode torrent search and streaming work with providers
 // that build queries like "S02E05".
 
+// Bump to invalidate cached media (e.g. when status computation changes).
+const MEDIA_CACHE_VERSION = 2
+
 class Provider implements CustomSource {
     api_key = "{{api-key}}"
 
@@ -436,12 +439,21 @@ class Provider implements CustomSource {
             : title
 
         const seasonStart = airDate ? new Date(airDate).getTime() : 0
-        const seasonStatus: $app.AL_MediaStatus =
-            !isNaN(seasonStart) && seasonStart > Date.now()
-                ? "NOT_YET_RELEASED"
-                : nextAiringEpisode
-                    ? "RELEASING"
-                    : "FINISHED"
+        const nextSeason = details.next_episode_to_air ? Number(details.next_episode_to_air.season_number) : undefined
+        const lastSeason = details.last_episode_to_air ? Number(details.last_episode_to_air.season_number) : undefined
+
+        let seasonStatus: $app.AL_MediaStatus
+        if (!isNaN(seasonStart) && seasonStart > Date.now()) {
+            seasonStatus = "NOT_YET_RELEASED"
+        } else if (nextAiringEpisode) {
+            seasonStatus = "RELEASING"
+        } else if (lastSeason !== undefined && lastSeason >= seasonNumber) {
+            seasonStatus = "FINISHED"
+        } else if (lastSeason !== undefined && lastSeason < seasonNumber) {
+            seasonStatus = "NOT_YET_RELEASED"
+        } else {
+            seasonStatus = "FINISHED"
+        }
 
         return {
             id: this._encodeId("tv", tmdbId, seasonNumber),
@@ -906,11 +918,20 @@ class Provider implements CustomSource {
     // ---------------------------------------------------------------- cache
 
     private _getMediaCache(): Record<number, StoredTMDBMedia> {
-        return ($store.get("tmdb.media") as Record<number, StoredTMDBMedia> | undefined) || {}
+        const raw = $store.get("tmdb.media") as { version?: number; media?: Record<number, StoredTMDBMedia> } | undefined
+
+        if (!raw || raw.version !== MEDIA_CACHE_VERSION || !raw.media) {
+            return {}
+        }
+
+        return raw.media
     }
 
     private _setMediaCache(cache: Record<number, StoredTMDBMedia>) {
-        $store.set("tmdb.media", cache)
+        $store.set("tmdb.media", {
+            version: MEDIA_CACHE_VERSION,
+            media: cache,
+        })
     }
 }
 
@@ -992,6 +1013,7 @@ type TMDBDetails = {
     seasons?: TMDBSeason[]
 
     next_episode_to_air?: TMDBEpisode
+    last_episode_to_air?: TMDBEpisode
 }
 
 type TMDBSeason = {
