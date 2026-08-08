@@ -252,8 +252,12 @@ class Provider {
     }
 
     private getConfigSegment(): string {
-        const user = ($getUserPreference("torrentioConfig") || "").trim()
-        const seg = user || DEFAULT_CONFIG
+        const preset = ($getUserPreference("torrentioPreset") || "").trim()
+        if (preset === "__none__") return ""
+        const custom = ($getUserPreference("torrentioConfig") || "").trim()
+        let seg = preset
+        if (!seg) seg = custom
+        if (!seg) seg = DEFAULT_CONFIG
         return seg.replace(/\|/g, "%7C")
     }
 

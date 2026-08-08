@@ -1,12 +1,12 @@
 {
   "id": "torrentio",
   "name": "Torrentio",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
   "description": "Uses Torrentio to find anime torrents. Supports TMDB custom-source media via IMDb resolution.",
-  "author": "aor-rex (fork of Crashdaemon)",
+  "author": "aor-rex",
   "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/icon.png",
   "lang": "multi",
   "userConfig": {
@@ -14,9 +14,24 @@
     "requiresConfig": false,
     "fields": [
       {
+        "type": "select",
+        "name": "torrentioPreset",
+        "label": "Config preset",
+        "default": "",
+        "options": [
+          { "label": "Custom (use field below)", "value": "" },
+          { "label": "Default: sort by quality, exclude cam/scr/unknown", "value": "sort=qualitysize|qualityfilter=cam,scr,unknown" },
+          { "label": "Sort by seeders", "value": "sort=seeders" },
+          { "label": "Exclude cam/scr/unknown", "value": "qualityfilter=cam,scr,unknown" },
+          { "label": "Max size 3GB", "value": "sizefilter=3GB" },
+          { "label": "Seeders + max size 3GB", "value": "sort=seeders|sizefilter=3GB" },
+          { "label": "No config (show all streams)", "value": "__none__" }
+        ]
+      },
+      {
         "type": "text",
         "name": "torrentioConfig",
-        "label": "Torrentio options (advanced, optional)",
+        "label": "Custom options (advanced) - e.g. sort=seeders|sizefilter=3GB|minfilesize=100MB|limit=10",
         "default": ""
       }
     ]
