@@ -161,7 +161,8 @@ class Provider {
 
     async smartSearch(opts: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
         const split = this.splitSeason(this.baseTitle(opts))
-        let q = split.base
+        const base = split.base
+        let q = base
 
         if (this.isMovie(opts.media)) {
             if (opts.media.seasonYear) q += ` ${opts.media.seasonYear}`
@@ -175,7 +176,19 @@ class Provider {
         if (opts.resolution) q += ` ${opts.resolution}`
         if (q.trim() === "") return []
 
-        return this.scrape(q, this.categoryFor(opts.media))
+        let torrents = await this.scrape(q, this.categoryFor(opts.media))
+
+        // Batch search: extto.com often doesn't index the literal word "complete"
+        // in batch torrent titles, so the precise query can come back empty. Fall
+        // back to a title-only query and keep anything that looks like a batch.
+        if (opts.batch && torrents.length === 0) {
+            let fb = base
+            if (opts.resolution) fb += ` ${opts.resolution}`
+            const fbTorrents = await this.scrape(fb, this.categoryFor(opts.media))
+            torrents = fbTorrents.filter((t) => t.isBatch)
+        }
+
+        return torrents
     }
 
     // EXT's magnet links are signed per-request. We scrape the torrent detail

@@ -1,12 +1,12 @@
 {
   "id": "thepiratebay",
   "name": "ThePiratebay",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TPB/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
   "description": "The Pirate Bay torrent provider for movies and series, with smart search.",
-  "author": "jabifx",
+  "author": "aor-rex",
   "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TPB/icon.png",
   "lang": "en",
   "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TPB/main.ts"

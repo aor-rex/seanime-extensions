@@ -23,7 +23,7 @@ type YtsMovie = {
 }
 
 class Provider {
-    private api = "https://yts.mx/api/v2"
+    private api = "https://yts.am/api/v2"
 
     getSettings(): AnimeProviderSettings {
         return {
