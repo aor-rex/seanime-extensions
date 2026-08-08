@@ -1,7 +1,7 @@
 {
   "id": "yts",
   "name": "YTS",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/YTS/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",

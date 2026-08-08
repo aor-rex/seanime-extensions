@@ -1,7 +1,7 @@
 {
   "id": "eztv",
   "name": "EZTV",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EZTV/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
