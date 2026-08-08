@@ -98,8 +98,100 @@ class Provider {
     private isBatchName(name: string): boolean {
         if (/(^|\b)(batch|complete)(\b|$)/i.test(name)) return true
         if (/\bS\d{1,2}(?![\dE])/i.test(name)) return true
+        // Full-season packs written out as "Season 2" (e.g. "Silo - Season 2 - Mp4"),
+        // but only when no episode marker follows ("Season 2 Episode 5" is not a batch).
+        if (/\bseason\s+\d{1,2}\b/i.test(name) && !this.hasEpisodeMarker(name)) return true
         // Episode-range batches like "1-64" or "001-008"
         return /\b\d{1,3}\s*-\s*\d{1,3}\b/.test(name)
+    }
+
+    // True when the name carries a single-episode marker (SxxEyy, "EP n", "E n").
+    private hasEpisodeMarker(name: string): boolean {
+        if (/\bS\d{1,2}E\d{1,3}\b/i.test(name)) return true
+        if (/\b(?:Episode|EP)\s*#?\s*\d{1,3}\b/i.test(name)) return true
+        return /(?:^|[.\s-])E\d{1,3}(?:[.\s-]|$)/i.test(name)
+    }
+
+    // Tokens that describe the file (codec, quality, site tags) rather than the
+    // media itself. Used so they don't count as "foreign" title tokens.
+    private isTechToken(t: string): boolean {
+        if (/^(s\d{1,2}e\d{1,3}|s\d{1,2}|e\d{1,3}|ep\d{1,3})$/i.test(t)) return true
+        if (/^\d{3,4}p$/.test(t) || /^[248]k$/i.test(t)) return true
+        if (/^(web|webrip|webdl|hdtv|hdrip|dvdrip|bluray|blu|bdrip|remux|x264|x265|h264|h265|hevc|avc|hdr|hdr10|dolby|vision|atmos|dts|truehd|aac|ac3|eac3|multi|dual|dualaudio|sub|subs|subbed|eng|en|fr|french|truefrench|esp|spa|ger|deu|ita|kor|jpn|jap|chi|pol|por|rus|tur|10bit)$/i.test(t)) return true
+        if (/^(complete|collection|boxset|series|season|pack|batch|mini|miniseries|part|parts|vol|volume|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|final|full|remaster|restored|extended|uncut|director|directors|cut|theatrical|proper|repack|internal|criterion|anniversary|edition|atvp|appletv|amzn|amazon|nf|netflix|dsnp|disney|hbo|hulu|hmax|max|peacock|paramount|showtime)$/i.test(t)) return true
+        return false
+    }
+
+    private isYearToken(t: string): boolean {
+        return /^(19|20)\d{2}$/.test(t)
+    }
+
+    // Tokens that separate the title from the episode/season/batch metadata.
+    private isBoundaryToken(t: string): boolean {
+        if (/^(s\d{1,2}e\d{0,3}|s\d{1,2}|e\d{1,3}|ep\d{1,3})$/i.test(t)) return true
+        if (/^(season|series|complete|collection|pack|batch|volume|vol|boxset)$/i.test(t)) return true
+        return /^(19|20)\d{2}$/.test(t)
+    }
+
+    // Builds the set of tokens that may legitimately appear in a torrent title
+    // for this media. Uses seanime's own normalizer so "the/an" noise and
+    // " — Season 2" suffixes don't pollute the comparison.
+    private buildAliasTokens(...titles: Array<string | undefined>): Set<string> {
+        const set = new Set<string>()
+        for (const title of titles) {
+            if (!title) continue
+            const base = this.splitSeason(title).base
+            const norm = $scannerUtils.normalizeTitle(base)
+            for (const t of norm?.tokens ?? []) set.add(t)
+        }
+        return set
+    }
+
+    // Returns significant tokens (seanime strips noise words and 1-char tokens).
+    private significantTokens(tokens: string[]): string[] {
+        return $scannerUtils.getSignificantTokens(tokens.join(" "))
+    }
+
+    // True when the torrent name actually belongs to the searched media.
+    // Single-word titles ("From", "Silo") are handled by only considering the
+    // title stem (everything before the first SxxE/season/batch/year marker), so
+    // "From the New World" or "From Dusk Till Dawn" are rejected while
+    // "From S03E05 1080p" passes.
+    private belongsTo(name: string, aliases: Set<string>, isMovie: boolean, expectedSeason: number, mediaYear: number): boolean {
+        const norm = $scannerUtils.normalizeTitle(name)
+        const toks = norm?.tokens ?? []
+        const nameYear = norm?.year ?? -1
+
+        if (isMovie) {
+            // A movie search shouldn't return episode torrents
+            if (this.hasEpisodeMarker(name)) return false
+            const foreign = this.significantTokens(toks).filter(
+                (t) => !aliases.has(t) && !this.isTechToken(t) && !this.isYearToken(t),
+            )
+            if (foreign.length > 0) return false
+            if (nameYear > 0 && mediaYear > 0 && Math.abs(nameYear - mediaYear) > 1) return false
+            return true
+        }
+
+        // Series results must structurally be series items
+        if (!this.isBatchName(name) && !this.hasEpisodeMarker(name)) return false
+
+        // Only evaluate the title stem (up to the first marker) so appended
+        // episode titles like "From.S01E01.The.Longer.Day" don't cause false drops
+        const boundaryIdx = toks.findIndex((t) => this.isBoundaryToken(t))
+        const stem = boundaryIdx === -1 ? toks : toks.slice(0, boundaryIdx)
+        const foreign = this.significantTokens(stem).filter((t) => !aliases.has(t) && !this.isTechToken(t))
+        if (foreign.length > 0) return false
+
+        // If the media is a specific season, reject torrents carrying a different one
+        if (expectedSeason > 0) {
+            const s = this.seasonOf(name)
+            if (s > 0 && s !== expectedSeason) return false
+        }
+
+        if (nameYear > 0 && mediaYear > 0 && Math.abs(nameYear - mediaYear) > 1) return false
+
+        return true
     }
 
     private toAnimeTorrent(t: TpbTorrent, confirmed = true): AnimeTorrent {
@@ -172,9 +264,15 @@ class Provider {
         const split = this.splitSeason(opts.query || opts.media.englishTitle || opts.media.romajiTitle || "")
         const q = this.sanitize(split.base)
         if (q.trim() === "") return []
+        const aliases = this.buildAliasTokens(opts.query, opts.media.englishTitle, opts.media.romajiTitle, ...(opts.media.synonyms ?? []))
+        const isMovie = this.isMovie(opts.media)
+        const mediaYear = opts.media.seasonYear || opts.media.startDate?.year || 0
+        const season = split.season
         let torrents = await this.searchQuery(q, this.catsFor(opts.media))
         if (torrents.length === 0) torrents = await this.searchQuery(q)
-        return torrents.map((t) => this.toAnimeTorrent(t))
+        return torrents
+            .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
+            .map((t) => this.toAnimeTorrent(t))
     }
 
     // apibay tokenizes queries and requires every token to appear in the torrent
@@ -189,9 +287,12 @@ class Provider {
         const split = this.splitSeason(this.sanitize(this.baseTitle(opts)))
         const base = split.base
         const season = split.season
+        const isMovie = this.isMovie(opts.media)
+        const mediaYear = opts.media.seasonYear || opts.media.startDate?.year || 0
+        const aliases = this.buildAliasTokens(opts.query, opts.media.englishTitle, opts.media.romajiTitle, ...(opts.media.synonyms ?? []))
         let q = base
 
-        if (this.isMovie(opts.media)) {
+        if (isMovie) {
             if (opts.media.seasonYear) q += ` ${opts.media.seasonYear}`
         } else if (opts.batch) {
             q += " complete"
@@ -205,8 +306,13 @@ class Provider {
         q = this.sanitize(q)
         if (q === "") return []
 
-        let torrents = await this.searchQuery(q, this.catsFor(opts.media))
-        if (torrents.length === 0) torrents = await this.searchQuery(q)
+        const query = async (searchQuery: string) => {
+            let results = await this.searchQuery(searchQuery, this.catsFor(opts.media))
+            if (results.length === 0) results = await this.searchQuery(searchQuery)
+            return results
+        }
+
+        let torrents = await query(q)
 
         // Batch search: apibay rarely has a "complete" or "season" token, so the
         // precise query often comes back empty. Fall back to a title-only query
@@ -215,29 +321,36 @@ class Provider {
             if (torrents.length === 0) {
                 let fb = base
                 if (resToken) fb += ` ${resToken}`
-                let fbTorrents = await this.searchQuery(fb, this.catsFor(opts.media))
-                if (fbTorrents.length === 0) fbTorrents = await this.searchQuery(fb)
-                torrents = fbTorrents.filter((t) => this.isBatchName(t.name))
+                torrents = (await query(fb)).filter((t) => this.isBatchName(t.name))
             }
-            return torrents.map((t) => this.toAnimeTorrent(t, true))
+            return torrents
+                .filter((t) => this.isBatchName(t.name) && this.belongsTo(t.name, aliases, false, season, mediaYear))
+                .map((t) => this.toAnimeTorrent(t, true))
         }
 
         // Single-episode search: apibay requires all query tokens to match, so a
         // "SxxEyy" suffix rarely matches real torrent names (season offsets,
         // absolute episode numbers, etc.). Fall back to a title-only query and
         // keep batches + torrents that parse to the requested season/episode.
-        if (opts.episodeNumber > 0 && torrents.length === 0) {
-            let fb = base
-            if (resToken) fb += ` ${resToken}`
-            let fbTorrents = await this.searchQuery(fb, this.catsFor(opts.media))
-            if (fbTorrents.length === 0) fbTorrents = await this.searchQuery(fb)
-            torrents = fbTorrents.filter(
-                (t) => this.isBatchName(t.name) || this.matchesEpisode(t.name, opts.episodeNumber, season),
-            )
-            return torrents.map((t) => this.toAnimeTorrent(t, false))
+        if (opts.episodeNumber > 0) {
+            if (torrents.length === 0) {
+                let fb = base
+                if (resToken) fb += ` ${resToken}`
+                torrents = (await query(fb)).filter(
+                    (t) => this.isBatchName(t.name) || this.matchesEpisode(t.name, opts.episodeNumber, season),
+                )
+            }
+            return torrents
+                .filter((t) =>
+                    this.belongsTo(t.name, aliases, isMovie, season, mediaYear)
+                    && (this.isBatchName(t.name) || this.matchesEpisode(t.name, opts.episodeNumber, season)),
+                )
+                .map((t) => this.toAnimeTorrent(t, true))
         }
 
-        return torrents.map((t) => this.toAnimeTorrent(t, true))
+        return torrents
+            .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
+            .map((t) => this.toAnimeTorrent(t, true))
     }
 
     async getTorrentInfoHash(torrent: AnimeTorrent): Promise<string> {
