@@ -356,7 +356,7 @@ class Provider implements CustomSource {
 
         if (seasons.length === 0) {
             const seasonNumber = 1
-            const media = this._tvSeasonMedia(details, title, originalTitle, seasonNumber, 1)
+            const media = this._tvSeasonMedia(details, title, originalTitle, seasonNumber, 1, details.first_air_date)
             const metadata = this._fallbackMetadata(media, "tv", details)
             return [{
                 tmdbId,
@@ -372,7 +372,7 @@ class Provider implements CustomSource {
         for (const season of seasons) {
             const seasonNumber = Number(season.season_number)
             const episodeCount = Number(season.episode_count) || 1
-            const media = this._tvSeasonMedia(details, title, originalTitle, seasonNumber, episodeCount)
+            const media = this._tvSeasonMedia(details, title, originalTitle, seasonNumber, episodeCount, season.air_date)
             const metadata = this._fallbackMetadata(media, "tv", details)
             cards.push({
                 tmdbId,
@@ -392,6 +392,7 @@ class Provider implements CustomSource {
         originalTitle: string,
         seasonNumber: number,
         episodeCount: number,
+        airDate?: string,
     ): $app.AL_BaseAnime {
         const tmdbId = Number(details.id)
         const poster = this._poster(details.poster_path)
@@ -434,6 +435,14 @@ class Provider implements CustomSource {
             ? `${title} — Season ${seasonNumber}`
             : title
 
+        const seasonStart = airDate ? new Date(airDate).getTime() : 0
+        const seasonStatus: $app.AL_MediaStatus =
+            !isNaN(seasonStart) && seasonStart > Date.now()
+                ? "NOT_YET_RELEASED"
+                : nextAiringEpisode
+                    ? "RELEASING"
+                    : "FINISHED"
+
         return {
             id: this._encodeId("tv", tmdbId, seasonNumber),
             siteUrl: this._siteUrl("tv", tmdbId),
@@ -454,7 +463,7 @@ class Provider implements CustomSource {
             genres,
             meanScore: details.vote_average ? Math.round(details.vote_average * 10) : 0,
             synonyms,
-            status: this._toStatus(details.status, details.first_air_date),
+            status: seasonStatus,
             episodes: episodeCount,
             type: "ANIME",
             format: "TV",
