@@ -13,7 +13,11 @@
 // that build queries like "S02E05".
 
 // Bump to invalidate cached media (e.g. when status computation changes).
-const MEDIA_CACHE_VERSION = 2
+const MEDIA_CACHE_VERSION = 3
+
+function errMsg(e: any): string {
+    return e instanceof Error ? e.message : String(e)
+}
 
 class Provider implements CustomSource {
     api_key = "{{api-key}}"
@@ -79,7 +83,11 @@ class Provider implements CustomSource {
         const mediaCache = this._getMediaCache()
         const cached = mediaCache[id]
 
-        if (cached?.metadata) {
+        // Only trust cached metadata that was genuinely built (per-episode
+        // overviews/stills for TV, or real movie metadata). The eager fallback
+        // metadata from listing is never valid to return here because it only
+        // contains a single placeholder episode.
+        if (cached?.metadata && cached.realMetadata) {
             return cached.metadata
         }
 
@@ -92,14 +100,29 @@ class Provider implements CustomSource {
         }
 
         let metadata: $app.Metadata_AnimeMetadata | null = null
+        let builtReal = false
 
-        if (decoded.mediaType === "movie") {
-            const details = await this._getDetails("movie", decoded.tmdbId)
-            if (details) {
-                metadata = this._movieDetailsToMetadata(details)
+        try {
+            if (decoded.mediaType === "movie") {
+                const details = await this._getDetails("movie", decoded.tmdbId)
+                if (details) {
+                    metadata = this._movieDetailsToMetadata(details)
+                    builtReal = true
+                }
+            } else {
+                metadata = await this._tvSeasonToMetadata(decoded.tmdbId, decoded.season)
+                if (metadata) {
+                    builtReal = true
+                }
             }
-        } else {
-            metadata = await this._tvSeasonToMetadata(decoded.tmdbId, decoded.season)
+        } catch (e) {
+            console.error("TMDB: metadata build failed: " + errMsg(e))
+        }
+
+        // Last resort: if the real metadata could not be built, use the media
+        // card's fallback so the episode list still has something to show.
+        if (!metadata && cached?.media) {
+            metadata = this._fallbackMetadata(cached.media, cached.mediaType, cached.media)
         }
 
         if (!metadata) {
@@ -109,6 +132,7 @@ class Provider implements CustomSource {
         const stored = cached || null
         if (stored) {
             stored.metadata = metadata
+            stored.realMetadata = builtReal
             mediaCache[stored.media.id] = stored
             this._setMediaCache(mediaCache)
         }
@@ -335,14 +359,11 @@ class Provider implements CustomSource {
             endDate: date || undefined,
         }
 
-        const metadata = this._fallbackMetadata(media, "movie", item)
-
         return {
             tmdbId,
             mediaType: "movie",
             season: 0,
             media,
-            metadata,
         }
     }
 
@@ -360,13 +381,11 @@ class Provider implements CustomSource {
         if (seasons.length === 0) {
             const seasonNumber = 1
             const media = this._tvSeasonMedia(details, title, originalTitle, seasonNumber, 1, details.first_air_date)
-            const metadata = this._fallbackMetadata(media, "tv", details)
             return [{
                 tmdbId,
                 mediaType: "tv",
                 season: seasonNumber,
                 media,
-                metadata,
             }]
         }
 
@@ -376,13 +395,11 @@ class Provider implements CustomSource {
             const seasonNumber = Number(season.season_number)
             const episodeCount = Number(season.episode_count) || 1
             const media = this._tvSeasonMedia(details, title, originalTitle, seasonNumber, episodeCount, season.air_date)
-            const metadata = this._fallbackMetadata(media, "tv", details)
             cards.push({
                 tmdbId,
                 mediaType: "tv",
                 season: seasonNumber,
                 media,
-                metadata,
             })
         }
 
@@ -556,6 +573,7 @@ class Provider implements CustomSource {
             season: 0,
             media,
             metadata,
+            realMetadata: true,
         }
     }
 
@@ -943,6 +961,9 @@ type StoredTMDBMedia = {
     season: number
     media: $app.AL_BaseAnime
     metadata?: $app.Metadata_AnimeMetadata
+    // True when the metadata was genuinely built (per-episode overviews/stills).
+    // False/absent for the placeholder fallback that is not safe to return.
+    realMetadata?: boolean
 }
 
 type TMDBListResponse<T> = {

@@ -144,6 +144,16 @@ function formatSizeBytes(size: number): string {
     return (size / Math.pow(1024, i)).toFixed(2) + " " + (units[i] || "B")
 }
 
+// Whether a batch torrent's name encodes a season range that covers (or is the
+// requested season). Multi-season packs ("S01-S07") are allowed as long as they
+// include the season. Torrents with no parseable season info are kept, since we
+// can't disprove they cover the season.
+function coversSeason(name: string, season: number): boolean {
+    const range = parseSeasonRange(name)
+    if (!range) return true
+    return season >= range.start && season <= range.end
+}
+
 // TMDB custom sources (like the bundled TMDB source) encode their media IDs:
 //   movie: 1000000000 + tmdbId
 //   tv:    2000000000 + tmdbId * 1000 + season
@@ -501,6 +511,20 @@ class Provider {
 
             if (!movieOrSingle && opts.batch) {
                 torrents = torrents.filter(t => t.isBatch)
+            }
+
+            if (!movieOrSingle && !opts.batch) {
+                // Single-episode search: drop packs so the user only sees
+                // releases for that exact episode, not whole-season batches.
+                torrents = torrents.filter(t => !t.isBatch)
+            }
+
+            if (!movieOrSingle && opts.batch && ids.tmdbSeason && ids.tmdbSeason > 0) {
+                // Season batch: keep packs whose season range covers the
+                // requested season (e.g. an "S01-S07" pack is valid for S2, but
+                // a "S05-S06" pack is not).
+                const season = ids.tmdbSeason
+                torrents = torrents.filter(t => coversSeason(t.name, season))
             }
 
             if (opts.resolution) {
