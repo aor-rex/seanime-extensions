@@ -65,6 +65,46 @@ class Provider {
 
     // ------------------------------------------------------------------ parsing
 
+    // Parses an EZTV date into RFC3339. Result rows show relative text like
+    // "3 hours ago" or absolute forms such as "Aug-07-2026".
+    private parseDate(value: string): string {
+        if (!value) return new Date().toISOString()
+        const t = value.trim()
+
+        const abs = t.match(/^([a-z]{3})[.\s-]+\s*(\d{1,2})[,.\s-]+\s*(\d{4})$/i)
+        if (abs) {
+            const months: Record<string, number> = {
+                jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+                jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+            }
+            const mon = months[abs[1].toLowerCase()]
+            if (mon !== undefined) {
+                const d = new Date(Date.UTC(Number(abs[3]), mon, Number(abs[2])))
+                if (!isNaN(d.getTime())) return d.toISOString()
+            }
+        }
+
+        if (/^today$/i.test(t)) return new Date(Date.now()).toISOString()
+        if (/^yesterday$/i.test(t)) return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+        const rel = t.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i)
+        if (rel) {
+            const mult: Record<string, number> = {
+                second: 1000,
+                minute: 60 * 1000,
+                hour: 60 * 60 * 1000,
+                day: 24 * 60 * 60 * 1000,
+                week: 7 * 24 * 60 * 60 * 1000,
+                month: 30 * 24 * 60 * 60 * 1000,
+                year: 365 * 24 * 60 * 60 * 1000,
+            }
+            const ms = mult[rel[2].toLowerCase()]
+            if (ms) return new Date(Date.now() - Number(rel[1]) * ms).toISOString()
+        }
+
+        return new Date().toISOString()
+    }
+
     private parseBlock(html: string): AnimeTorrent | null {
         const magnetM = html.match(/href="(magnet:\?[^"]+)"/i)
         const titleM = html.match(/<a href="(\/ep\/[^"]+)">\s*([\s\S]*?)\s*<\/a>/i)
@@ -82,7 +122,7 @@ class Provider {
 
         return {
             name: title,
-            date: new Date().toISOString(),
+            date: this.parseDate(dateM ? dateM[1] : ""),
             size: this.sizeToBytes(sizeM ? sizeM[1] : ""),
             formattedSize: sizeM ? sizeM[1].trim() : "",
             seeders: seedM ? parseInt(seedM[1].replace(/,/g, ""), 10) : 0,
