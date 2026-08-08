@@ -183,6 +183,47 @@ class Provider {
         return "2" // TV
     }
 
+    // Parses a search row date into RFC3339. EXT renders dates either as an
+    // absolute "07 August 2026" string (in the Age cell title) or as relative
+    // text like "22 hours ago" on rows that lack the attribute.
+    private parseDate(value: string): string {
+        if (!value) return new Date().toISOString()
+        const t = value.trim()
+
+        const abs = t.match(/^(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})$/)
+        if (abs) {
+            const months: Record<string, number> = {
+                january: 0, february: 1, march: 2, april: 3, may: 4, june: 5,
+                july: 6, august: 7, september: 8, october: 9, november: 10, december: 11,
+            }
+            const mon = months[abs[2].toLowerCase()]
+            if (mon !== undefined) {
+                const d = new Date(Date.UTC(Number(abs[3]), mon, Number(abs[1])))
+                if (!isNaN(d.getTime())) return d.toISOString()
+            }
+        }
+
+        const rel = t.match(/^(\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago$/i)
+        if (rel) {
+            const mult: Record<string, number> = {
+                second: 1000,
+                minute: 60 * 1000,
+                hour: 60 * 60 * 1000,
+                day: 24 * 60 * 60 * 1000,
+                week: 7 * 24 * 60 * 60 * 1000,
+                month: 30 * 24 * 60 * 60 * 1000,
+                year: 365 * 24 * 60 * 60 * 1000,
+            }
+            const ms = mult[rel[2].toLowerCase()] ?? 0
+            return new Date(Date.now() - Number(rel[1]) * ms).toISOString()
+        }
+
+        if (/^today$/i.test(t)) return new Date(Date.now()).toISOString()
+        if (/^yesterday$/i.test(t)) return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+        return new Date().toISOString()
+    }
+
     // Parses a single search table row into an AnimeTorrent.
     private toAnimeTorrent(el: DocSelection): AnimeTorrent | null {
         const titleEl = el.find("a.torrent-title-link").first()
@@ -194,7 +235,7 @@ class Provider {
 
         return {
             name: title,
-            date: new Date().toISOString(),
+            date: this.parseDate(cells.date),
             size: cells.size,
             formattedSize: "",
             seeders: cells.seeders,
@@ -219,19 +260,22 @@ class Provider {
         return m ? m[1] : ""
     }
 
-    // Reads the Size / Seeds / Leeches values from the row's add-block cells.
-    private readCells(el: DocSelection): { size: number; seeders: number; leechers: number } {
+    // Reads the Size / Seeds / Leeches / Age values from the row's add-block cells.
+    private readCells(el: DocSelection): { size: number; seeders: number; leechers: number; date: string } {
         let size = 0
         let seeders = 0
         let leechers = 0
+        let date = ""
         el.find("div.add-block-wrapper").each((_, cell) => {
             const label = cell.find("span.add-block").text().trim().toLowerCase()
-            const value = cell.find("span").eq(1).text().trim()
+            const valueEl = cell.find("span").eq(1)
+            const value = valueEl.text().trim()
             if (label === "size") size = this.sizeToBytes(value)
             else if (label === "seeds") seeders = parseInt(value, 10) || 0
             else if (label === "leechs") leechers = parseInt(value, 10) || 0
+            else if (label === "age") date = valueEl.attr("title") || value
         })
-        return { size, seeders, leechers }
+        return { size, seeders, leechers, date }
     }
 
     private async scrape(query: string, category: string): Promise<AnimeTorrent[]> {
@@ -395,7 +439,7 @@ class Provider {
 
         return {
             name: title,
-            date: new Date().toISOString(),
+            date: this.parseDate(cells.date),
             size: cells.size,
             formattedSize: "",
             seeders: cells.seeders,
