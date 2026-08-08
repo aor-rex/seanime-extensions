@@ -106,6 +106,44 @@ function dedupeByHash(list: AnimeTorrent[]): AnimeTorrent[] {
     return out
 }
 
+// Torrentio only reports the size of the single matched FILE per stream request
+// (record.size). For season-pack torrents this is one episode's file, not the
+// torrent total. We reconstruct the total by scanning each episode of the pack's
+// season(s): Torrentio returns the same infoHash per episode with a distinct
+// fileIdx, so summing distinct file sizes equals the torrent total.
+
+// Detect the season range encoded in a pack title: "S01-S07", "S1-S2",
+// "Season 1-4" -> {1,7}. Single-season: "S03", "Season 3" -> {3,3}.
+// Returns null when no season info is found.
+function parseSeasonRange(title: string): { start: number; end: number } | null {
+    const t = title || ""
+    const range = t.match(/\b(?:S|Season)\s*\d{1,2}\s*[-–—~]\s*S?\s*\d{1,2}\b/i)
+    if (range) {
+        const parts = range[0].match(/\d{1,2}/g)
+        if (parts && parts.length >= 2) {
+            const start = parseInt(parts[0], 10)
+            const end = parseInt(parts[1], 10)
+            if (end >= start) return { start: start, end: end }
+        }
+    }
+    const single = t.match(/\bS\d{1,2}\b/) || t.match(/\bSeason\s+\d{1,2}\b/i)
+    if (single) {
+        const num = single[0].match(/\d{1,2}/)
+        if (num) {
+            const v = parseInt(num[0], 10)
+            return { start: v, end: v }
+        }
+    }
+    return null
+}
+
+function formatSizeBytes(size: number): string {
+    if (!size) return "0 B"
+    const i = size === 0 ? 0 : Math.floor(Math.log(size) / Math.log(1024))
+    const units = ["B", "KB", "MB", "GB", "TB"]
+    return (size / Math.pow(1024, i)).toFixed(2) + " " + (units[i] || "B")
+}
+
 // TMDB custom sources (like the bundled TMDB source) encode their media IDs:
 //   movie: 1000000000 + tmdbId
 //   tv:    2000000000 + tmdbId * 1000 + season
@@ -179,6 +217,8 @@ async function tmdbToImdb(tmdbId: number, isMovie: boolean): Promise<string> {
 
 class Provider {
     private cache: { [anilistId: number]: ResolvedIds } = {}
+    // infoHash + config segment -> estimated total size in bytes
+    private batchSizeCache: { [key: string]: number } = {}
 
     getSettings(): AnimeProviderSettings {
         return {
@@ -354,12 +394,95 @@ class Provider {
         return []
     }
 
+    // Reconstruct total torrent sizes for batch torrents. Torrentio's per-episode
+    // endpoint returns the same pack infoHash with a different fileIdx each time,
+    // so we scan episodes and sum the distinct file sizes.
+    private async estimateBatchSizes(torrents: AnimeTorrent[], ids: ResolvedIds, media: Media): Promise<void> {
+        const batch = torrents.filter(t => t.isBatch && t.infoHash)
+        if (batch.length === 0) return
+
+        const cfg = this.getConfigSegment()
+        const season = (ids.tmdbSeason && ids.tmdbSeason > 0) ? ids.tmdbSeason : 1
+        const useKitsu = !!ids.kitsuId
+
+        // Group per infoHash
+        const nfo: { [k: string]: AnimeTorrent } = {}
+        for (const t of batch) {
+            if (!nfo[t.infoHash!]) nfo[t.infoHash!] = t
+        }
+        const hashes = Object.keys(nfo)
+        const uncached: string[] = hashes.filter(h => !(this.batchSizeCache[cfg + "|" + h]))
+
+        if (uncached.length > 0) {
+            const perHashFiles: { [k: string]: { [fileIdx: number]: number } } = {}
+            const wanted = new Set(uncached)
+            const cap = Math.min(media.episodeCount && media.episodeCount > 0 ? media.episodeCount : 100, 100)
+            let emptyRuns = 0
+            let matched = false
+            for (let ep = 1; ep <= cap; ep++) {
+                const url = useKitsu
+                    ? this.seriesUrl(ids.kitsuId!, ep)
+                    : this.imdbSeriesUrl(ids.imdbId!, season, ep)
+                const streams = await this.fetchStreams(url)
+                let foundAny = false
+                for (const s of streams) {
+                    if (!wanted.has(s.infoHash)) continue
+                    foundAny = true
+                    const size = parseStreamMeta(s.title || "").sizeBytes
+                    if (!size) continue
+                    const idx = typeof s.fileIdx === "number" ? s.fileIdx : 0
+                    if (!perHashFiles[s.infoHash]) perHashFiles[s.infoHash] = {}
+                    perHashFiles[s.infoHash][idx] = size
+                }
+                // Stop after 2 consecutive episodes that produced no streams we care
+                // about, but only once we've matched at least one (kitsu packs may
+                // start at high absolute episode numbers).
+                if (foundAny) {
+                    matched = true
+                    emptyRuns = 0
+                } else if (matched) {
+                    emptyRuns++
+                    if (emptyRuns >= 2) break
+                }
+            }
+            // Cache totals for the searched season's files
+            for (const h of uncached) {
+                const set = perHashFiles[h]
+                if (!set) continue
+                let total = 0
+                for (const k in set) total += set[k]
+                if (total > 0) this.batchSizeCache[cfg + "|" + h] = total
+            }
+        }
+
+        // Apply estimates
+        for (const h of hashes) {
+            const t = nfo[h]
+            const searchedSeasonTotal = this.batchSizeCache[cfg + "|" + h]
+            if (!searchedSeasonTotal) continue
+            const range = parseSeasonRange(t.name)
+            if (range && range.end > range.start) {
+                const seasons = range.end - range.start + 1
+                const estimated = searchedSeasonTotal * seasons
+                t.size = estimated
+                t.formattedSize = "≈ " + formatSizeBytes(estimated)
+            } else {
+                t.size = searchedSeasonTotal
+                t.formattedSize = ""
+            }
+        }
+    }
+
     async search(opts: AnimeSearchOptions): Promise<AnimeTorrent[]> {
         try {
             const media = opts.media
             const ids = await this.resolveIds(media)
             const streams = await this.fetchForMedia(ids, media, 1)
-            return dedupeByHash(streams.map(s => this.streamToTorrent(s, !!(ids.kitsuId || ids.imdbId))))
+            const torrents = dedupeByHash(streams.map(s => this.streamToTorrent(s, !!(ids.kitsuId || ids.imdbId))))
+            if (!this.isMovieOrSingle(media)) {
+                await this.estimateBatchSizes(torrents, ids, media)
+            }
+            return torrents
         } catch (e) {
             console.error("Torrentio: search error: " + errMsg(e))
             return []
@@ -382,6 +505,10 @@ class Provider {
 
             if (opts.resolution) {
                 torrents = torrents.filter(t => resolutionMatches(t.resolution || "", opts.resolution))
+            }
+
+            if (!movieOrSingle) {
+                await this.estimateBatchSizes(torrents, ids, media)
             }
 
             return dedupeByHash(torrents)
