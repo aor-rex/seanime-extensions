@@ -40,11 +40,34 @@ interface SimklItem {
     ratings?: SimklRatings
     runtime?: number
     first_aired?: string
+    last_aired?: string
+    rank?: number
+    country?: string
+    network?: string
+    director?: string
+    trailers?: SimklTrailer[]
+    studios?: { name?: string }[]
+    relations?: SimklRelation[]
+    users_recommendations?: SimklRelation[]
     watching_details?: {
         watched_episodes?: number
         total_episodes?: number
     }
     adult?: boolean
+}
+
+interface SimklTrailer {
+    name?: string
+    youtube?: string
+    size?: number
+}
+
+interface SimklRelation {
+    title?: string
+    url?: string
+    year?: number
+    type?: string
+    poster?: string
 }
 
 interface SimklEpisode {
@@ -158,8 +181,8 @@ class Provider implements CustomSource {
 
     private typeOf(item: SimklItem): SimklMediaType {
         const t = String(item?.type ?? item?.endpoint_type ?? "").toLowerCase()
-        if (t === "movie") return "movie"
-        if (t === "anime" || t === "ona") return "anime"
+        if (t === "movie" || t === "movies") return "movie"
+        if (t === "anime" || t === "animes" || t === "ona") return "anime"
         if (item?.anime_type) return "anime"
         return "tv"
     }
@@ -189,6 +212,45 @@ class Provider implements CustomSource {
         const d = new Date(dateStr)
         if (isNaN(d.getTime())) return { year: year || 0 }
         return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() }
+    }
+
+    private siteUrlOf(item: SimklItem, type: SimklMediaType): string {
+        if (item?.ids?.slug) {
+            const seg = type === "movie" ? "movies" : "shows"
+            return `https://simkl.com/${seg}/${this.idOf(item)}/${item.ids.slug}`
+        }
+        return `https://simkl.com/${this.idOf(item)}`
+    }
+
+    private trailerOf(item: SimklItem): $app.AL_BaseAnime_Trailer | undefined {
+        const yt = item?.trailers?.[0]?.youtube
+        if (!yt) return undefined
+        return {
+            id: yt,
+            site: "youtube",
+            thumbnail: `https://img.youtube.com/vi/${yt}/mqdefault.jpg`,
+        }
+    }
+
+    private parseSimklUrl(url: string): { type: SimklMediaType; simklId: number } | null {
+        const m = String(url || "").match(/\/(movies|movie|shows|show|tv|anime)\/(\d+)/i)
+        if (!m) return null
+        const seg = m[1].toLowerCase()
+        let type: SimklMediaType
+        if (seg === "movies" || seg === "movie") type = "movie"
+        else if (seg === "anime") type = "anime"
+        else type = "tv"
+        const simklId = Number(m[2])
+        if (!simklId) return null
+        return { type, simklId }
+    }
+
+    private hashCode(str: string): number {
+        let h = 0
+        for (let i = 0; i < str.length; i++) {
+            h = ((h << 5) - h + str.charCodeAt(i)) | 0
+        }
+        return Math.abs(h) || 1
     }
 
     // ---------------------------------------------------------------- ID scheme
@@ -272,9 +334,7 @@ class Provider implements CustomSource {
 
         return {
             id: this.encodeId(type, simklId, season),
-            siteUrl: item?.ids?.slug
-                ? `https://simkl.com/${isMovie ? "movies" : "shows"}/${simklId}/${item.ids.slug}`
-                : `https://simkl.com/${simklId}`,
+            siteUrl: this.siteUrlOf(item, type),
             title: {
                 userPreferred: title,
                 romaji: title,
@@ -298,8 +358,11 @@ class Provider implements CustomSource {
             format: this.format(type) as $app.AL_MediaFormat,
             seasonYear: item.year,
             isAdult: item.adult ?? false,
+            countryOfOrigin: item.country,
+            duration: item.runtime,
+            trailer: this.trailerOf(item),
             startDate: this.parseDate(item.first_aired, item.year ?? 0),
-            endDate: undefined,
+            endDate: this.parseDate(item.last_aired, item.year ?? 0),
         }
     }
 
@@ -400,6 +463,221 @@ class Provider implements CustomSource {
         }
     }
 
+    // ---------------------------------------------------------------- detail helpers
+
+    private async getDetail(type: SimklMediaType, simklId: number): Promise<SimklItem | null> {
+        const cache = $store.get<Record<string, SimklItem>>("simkl.details") ?? {}
+        const key = `${type}:${simklId}`
+        if (cache[key]) return cache[key]
+
+        const item = await this.get<SimklItem>(`${this.detailEndpoint(type)}/${simklId}`, { extended: "full" })
+        if (!item || !item.ids) return null
+
+        cache[key] = item
+        $store.set("simkl.details", cache)
+        return item
+    }
+
+    private buildRankings(item: SimklItem, type: SimklMediaType): $app.AL_AnimeDetailsById_Media_Rankings[] {
+        const rank = item.rank
+        if (!rank) return []
+        return [{
+            allTime: true,
+            context: "SIMKL",
+            format: this.format(type) as $app.AL_MediaFormat,
+            rank: rank,
+            type: "RATED",
+            year: item.year,
+        }]
+    }
+
+    private buildStudios(item: SimklItem, type: SimklMediaType): $app.AL_AnimeDetailsById_Media_Studios | undefined {
+        const names: string[] = []
+        if (type === "anime") {
+            for (const s of item.studios ?? []) if (s?.name) names.push(s.name)
+        } else if (type === "tv") {
+            if (item.network) names.push(item.network)
+        } else {
+            if (item.director) names.push(item.director)
+        }
+        if (names.length === 0) return undefined
+        return { nodes: names.map((name, i) => ({ id: 100000 + i, name })) }
+    }
+
+    private relationTypeOf(rel: SimklRelation, type: SimklMediaType): $app.AL_MediaRelation {
+        const r = String(rel?.type ?? "").toLowerCase()
+        if (r.includes("prequel")) return "PREQUEL"
+        if (r.includes("sequel")) return "SEQUEL"
+        if (r.includes("side") || r.includes("spin")) return "SIDE_STORY"
+        if (r.includes("manga") || r.includes("novel") || r.includes("source") || r.includes("book")) return "SOURCE"
+        if (r.includes("alternative") || r.includes("reboot") || r.includes("version")) return "ALTERNATIVE"
+        if (r.includes("compilation") || r.includes("recap")) return "COMPILATION"
+        if (r.includes("summary")) return "SUMMARY"
+        if (r.includes("parent")) return "PARENT"
+        if (r.includes("character")) return "CHARACTER"
+        return "OTHER"
+    }
+
+    private relationToBase(rel: SimklRelation): $app.AL_BaseAnime | null {
+        const parsed = rel?.url ? this.parseSimklUrl(rel.url) : null
+        if (!parsed) return null
+        const title = rel.title ?? ""
+        const cover = this.posterUrl(rel.poster)
+        return {
+            id: this.encodeId(parsed.type, parsed.simklId, 1),
+            siteUrl: rel.url,
+            title: {
+                userPreferred: title,
+                romaji: title,
+                english: title,
+                native: title,
+            },
+            coverImage: {
+                large: cover,
+                medium: cover,
+                extraLarge: cover,
+                color: "",
+            },
+            bannerImage: "",
+            description: "",
+            genres: [],
+            meanScore: 0,
+            synonyms: [],
+            status: "FINISHED",
+            episodes: parsed.type === "movie" ? 1 : undefined,
+            type: "ANIME",
+            format: this.format(parsed.type) as $app.AL_MediaFormat,
+            seasonYear: rel.year,
+            isAdult: false,
+            startDate: { year: rel.year ?? 0 },
+            endDate: undefined,
+        }
+    }
+
+    private async buildRelations(item: SimklItem, type: SimklMediaType): Promise<$app.AL_AnimeDetailsById_Media_Relations | undefined> {
+        const rels = type === "anime" ? (item.relations ?? []) : (item.users_recommendations ?? [])
+        if (rels.length === 0) return undefined
+        const edges: $app.AL_AnimeDetailsById_Media_Relations_Edges[] = []
+        for (const rel of rels.slice(0, 12)) {
+            const node = this.relationToBase(rel)
+            if (node) edges.push({ node, relationType: this.relationTypeOf(rel, type) })
+        }
+        if (edges.length === 0) return undefined
+        return { edges }
+    }
+
+    private async buildRecommendations(item: SimklItem, type: SimklMediaType): Promise<$app.AL_AnimeDetailsById_Media_Recommendations | undefined> {
+        const recs = item.users_recommendations ?? []
+        if (recs.length === 0) return undefined
+        const edges: $app.AL_AnimeDetailsById_Media_Recommendations_Edges[] = []
+        for (const rec of recs.slice(0, 10)) {
+            const parsed = rec?.url ? this.parseSimklUrl(rec.url) : null
+            if (!parsed) continue
+            const recId = this.encodeId(parsed.type, parsed.simklId, 1)
+            const cover = this.posterUrl(rec.poster)
+            edges.push({
+                node: {
+                    mediaRecommendation: {
+                        id: recId,
+                        siteUrl: rec.url,
+                        title: {
+                            userPreferred: rec.title ?? "",
+                            romaji: rec.title ?? "",
+                            english: rec.title ?? "",
+                            native: rec.title ?? "",
+                        },
+                        coverImage: {
+                            large: cover,
+                            medium: cover,
+                            extraLarge: cover,
+                            color: "",
+                        },
+                        format: this.format(parsed.type) as $app.AL_MediaFormat,
+                        startDate: { year: rec.year ?? 0 },
+                        isAdult: false,
+                        meanScore: 0,
+                        status: "FINISHED",
+                        type: "ANIME",
+                    },
+                },
+            })
+        }
+        if (edges.length === 0) return undefined
+        return { edges }
+    }
+
+    private parsePeople(data: any): $app.AL_AnimeDetailsById_Media_Characters_Edges[] | undefined {
+        if (!data) return undefined
+        let list: any[] = []
+        if (Array.isArray(data)) {
+            list = data
+        } else if (Array.isArray(data.cast)) {
+            list = data.cast
+        } else if (Array.isArray(data.people)) {
+            list = data.people
+        } else if (Array.isArray(data.characters)) {
+            list = data.characters
+        }
+        if (list.length === 0) return undefined
+
+        const edges: $app.AL_AnimeDetailsById_Media_Characters_Edges[] = []
+        for (const entry of list) {
+            const actor = entry?.actor ?? entry
+            const character = entry?.character ?? entry
+            const img = actor?.image?.large ?? actor?.image ?? actor?.poster ?? character?.image?.large ?? character?.image
+            const name = actor?.name ?? character?.name
+            if (!img || !name) continue
+            const id = this.hashCode(String(name) + String(img))
+            edges.push({
+                id,
+                name: String(name),
+                node: {
+                    id,
+                    isFavourite: false,
+                    name: { full: String(name), native: String(name) },
+                    image: { large: String(img) },
+                },
+                role: "SUPPORTING",
+            })
+        }
+        return edges.length > 0 ? edges : undefined
+    }
+
+    private async getCharacters(simklId: number, type: SimklMediaType): Promise<$app.AL_AnimeDetailsById_Media_Characters | undefined> {
+        const people = await this.get<any>(`${this.detailEndpoint(type)}/${simklId}/people`, {}, false)
+        const parsed = this.parsePeople(people)
+        if (parsed) return { edges: parsed }
+
+        // Fallback: scrape the site's cast page (guest-gated; may fail, then we omit characters)
+        try {
+            const base = type === "movie" ? "movies" : "shows"
+            const res = await fetch(`https://simkl.com/${base}/${simklId}/cast/`)
+            if (!res.ok) return undefined
+            const $ = LoadDoc(String(res.text()))
+            const edges: $app.AL_AnimeDetailsById_Media_Characters_Edges[] = []
+            $("[class*='cast'] [class*='item'], [class*='cast-list'] [class*='item'], [class*='person']").each((_, el) => {
+                const name = el.find("a[href*='/actor/']").first().text().trim() || el.find("[class*='name']").first().text().trim()
+                const img = el.find("img").first().attr("src")
+                if (!name || !img) return
+                const id = this.hashCode(name + img)
+                edges.push({
+                    id,
+                    name,
+                    node: {
+                        id,
+                        isFavourite: false,
+                        name: { full: name, native: name },
+                        image: { large: img },
+                    },
+                    role: "SUPPORTING",
+                })
+            })
+            return edges.length > 0 ? { edges } : undefined
+        } catch {
+            return undefined
+        }
+    }
+
     // ---------------------------------------------------------------- metadata builders
 
     private buildSeasonMetadata(episodes: SimklEpisode[], type: "tv" | "anime", season: number, title: string): $app.Metadata_AnimeMetadata {
@@ -488,24 +766,28 @@ class Provider implements CustomSource {
             if (this.hideAnime && decoded.type === "anime") return null
 
             const cached = mediaCache[id]
-            if (cached) return cached
 
-            const item = await this.get<SimklItem>(`${this.detailEndpoint(decoded.type)}/${decoded.simklId}`, { extended: "full" })
-            if (!item || !item.ids) return null
+            // Detail-fetch first (cached in simkl.details) so cards carry trailer/dates; fall back to cache on failure
+            const item = await this.getDetail(decoded.type, decoded.simklId)
+            if (item && item.ids) {
+                let epCount = this.episodeCount(item)
+                if (decoded.type !== "movie") {
+                    const info = await this.seasonInfo(decoded.simklId, decoded.type)
+                    epCount = info?.counts?.[decoded.season] ?? epCount
+                }
 
-            let epCount = this.episodeCount(item)
-            if (decoded.type !== "movie") {
-                const info = await this.seasonInfo(decoded.simklId, decoded.type)
-                epCount = info?.counts?.[decoded.season] ?? epCount
+                const base = this.toALBaseAnime(item, {
+                    type: decoded.type,
+                    season: decoded.season,
+                    episodeCount: decoded.type === "movie" ? 1 : epCount,
+                })
+                if (base) {
+                    mediaCache[id] = base
+                    return base
+                }
             }
 
-            const base = this.toALBaseAnime(item, {
-                type: decoded.type,
-                season: decoded.season,
-                episodeCount: decoded.type === "movie" ? 1 : epCount,
-            })
-            if (base) mediaCache[id] = base
-            return base
+            return cached ?? null
         })
 
         const results = await Promise.all(promises)
@@ -519,7 +801,39 @@ class Provider implements CustomSource {
     }
 
     async getAnimeDetails(id: number): Promise<$app.AL_AnimeDetailsById_Media | null> {
-        return null
+        const decoded = this.decodeId(id)
+        if (!decoded) return null
+        if (this.hideAnime && decoded.type === "anime") return null
+
+        const item = await this.getDetail(decoded.type, decoded.simklId)
+        if (!item || !item.ids) return null
+
+        const score = this.meanScore(item)
+        const relations = await this.buildRelations(item, decoded.type)
+        const recommendations = await this.buildRecommendations(item, decoded.type)
+
+        const details: $app.AL_AnimeDetailsById_Media = {
+            id: id,
+            siteUrl: this.siteUrlOf(item, decoded.type),
+            description: item.overview ?? "",
+            genres: item.genres ?? [],
+            meanScore: score,
+            averageScore: score,
+            popularity: item.ratings?.simkl?.votes,
+            duration: item.runtime,
+            startDate: this.parseDate(item.first_aired, item.year ?? 0),
+            endDate: this.parseDate(item.last_aired, item.year ?? 0),
+            trailer: this.trailerOf(item),
+            rankings: this.buildRankings(item, decoded.type),
+            studios: this.buildStudios(item, decoded.type),
+            relations: relations ?? { edges: [] },
+            recommendations: recommendations ?? { edges: [] },
+        }
+
+        const characters = await this.getCharacters(decoded.simklId, decoded.type)
+        if (characters) details.characters = characters
+
+        return details
     }
 
     async getAnimeMetadata(id: number): Promise<$app.Metadata_AnimeMetadata | null> {
@@ -561,39 +875,36 @@ class Provider implements CustomSource {
     }
 
     async getAnimeWithRelations(id: number): Promise<$app.AL_CompleteAnime> {
-        const mediaCache = $store.get<Record<number, $app.AL_BaseAnime>>("simkl.media") ?? {}
-        const cached = mediaCache[id]
-        if (cached) {
-            return {
-                ...cached,
-                relations: { edges: [] },
-            } as $app.AL_CompleteAnime
+        const decoded = this.decodeId(id)
+        if (!decoded) throw new Error("not found.")
+        if (this.hideAnime && decoded.type === "anime") throw new Error("not found.")
+
+        const item = await this.getDetail(decoded.type, decoded.simklId)
+        if (!item || !item.ids) throw new Error("not found.")
+
+        let epCount = this.episodeCount(item)
+        if (decoded.type !== "movie") {
+            const info = await this.seasonInfo(decoded.simklId, decoded.type)
+            epCount = info?.counts?.[decoded.season] ?? epCount
         }
 
-        const decoded = this.decodeId(id)
-        if (this.hideAnime && decoded?.type === "anime") throw new Error("not found.")
-        if (decoded) {
-            const item = await this.get<SimklItem>(`${this.detailEndpoint(decoded.type)}/${decoded.simklId}`, { extended: "full" })
-            if (item && item.ids) {
-                let epCount = this.episodeCount(item)
-                if (decoded.type !== "movie") {
-                    const info = await this.seasonInfo(decoded.simklId, decoded.type)
-                    epCount = info?.counts?.[decoded.season] ?? epCount
-                }
-                const base = this.toALBaseAnime(item, {
-                    type: decoded.type,
-                    season: decoded.season,
-                    episodeCount: decoded.type === "movie" ? 1 : epCount,
-                })
-                if (base) {
-                    return {
-                        ...base,
-                        relations: { edges: [] },
-                    } as $app.AL_CompleteAnime
-                }
-            }
-        }
-        throw new Error("not found.")
+        const base = this.toALBaseAnime(item, {
+            type: decoded.type,
+            season: decoded.season,
+            episodeCount: decoded.type === "movie" ? 1 : epCount,
+        })
+        if (!base) throw new Error("not found.")
+
+        const relations = await this.buildRelations(item, decoded.type)
+
+        const mediaCache = $store.get<Record<number, $app.AL_BaseAnime>>("simkl.media") ?? {}
+        mediaCache[id] = base
+        $store.set("simkl.media", mediaCache)
+
+        return {
+            ...base,
+            relations: relations ?? { edges: [] },
+        } as $app.AL_CompleteAnime
     }
 
     async listAnime(search: string, page: number, perPage: number): Promise<ListResponse<$app.AL_BaseAnime>> {
@@ -602,8 +913,8 @@ class Provider implements CustomSource {
             return { media: media, total: media.length, page: 1, totalPages: 1 }
         }
 
-        // Prefer the user's SIMKL watchlist when an access token is configured
-        if (this.accessToken) {
+        // Prefer the user's SIMKL watchlist when an access token is configured and no search is active
+        if (this.accessToken && search.trim() === "") {
             const wl = await this.get<SimklWatchlist>("/sync/all-items/", { extended: "full" }, true)
             if (wl) {
                 const media: $app.AL_BaseAnime[] = []

@@ -9,8 +9,9 @@ Personal fork of [`dot-fx/seanime-extensions`](https://github.com/dot-fx/seanime
 ### SIMKL custom source (`src/SIMKL`) — **Simkl V2** (`id: simklv2`)
 - Movie support in addition to TV shows.
 - **Watchlist** support via a SIMKL OAuth access token (PIN flow).
-- Per-season TV/anime sources; bumped to `2.1.1`, points at the fork's raw URLs.
+- Per-season TV/anime sources; bumped to `2.3.0`, points at the fork's raw URLs.
 - Renamed to `simklv2` so it can be installed alongside (or replace) the community SIMKL extension.
+- **v2.3.0 — content enrichment + fixes**: search now actually runs when a token is set (watchlist only shows on an empty search); movie search results are no longer misclassified as TV; entry pages now show description, genres, score, studio (anime studios / TV network / movie director), YouTube trailer, SIMKL rankings, relations/recommendations, and characters (best-effort via `/people`, with a site-scrape fallback); cards carry trailer, duration, and dates.
 
 ### ListSync (`src/ListSync`)
 Two-way sync between your SIMKL watchlist and your SIMKL V2 / TMDB V2 custom-source entries:
@@ -53,7 +54,6 @@ The bundled `anime-torrent-provider.d.ts` / `core.d.ts` were added (they're miss
    | **Simkl V2** | custom source | `simklv2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/manifest.json` |
    | **TMDB V2** | custom source | `tmdbv2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TMDB/manifest.json` |
    | **ListSync** | plugin | `listsync` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json` |
-   | **UI Translation** | plugin | `ui-translation` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/UI-Translation/manifest.json` |
    | **EXT Torrents** | torrent provider | `ext` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EXT/manifest.json` |
    | **1337x** | torrent provider | `l337x` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/1337x/manifest.json` |
    | **YTS** | torrent provider | `yts` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/YTS/manifest.json` |
