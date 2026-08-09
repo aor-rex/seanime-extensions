@@ -41,6 +41,12 @@ function init() {
 
 		const STORAGE_BACKFILL_DONE = "listsync:backfill:done";
 
+		// Access token can come from the in-app PIN login (persisted to $storage) or
+		// from the extension's "access-token" config field (power-user fallback).
+		function resolveAccessToken(): string | undefined {
+			return $storage.get("listsync.accessToken") ?? $getUserPreference("access-token") ?? undefined;
+		}
+
 		const SIMKL_STATUS_MAP: Record<string, string> = {
 			PLANNING: "plantowatch",
 			CURRENT: "watching",
@@ -124,7 +130,7 @@ function init() {
 		// POST /sync/add-to-list to set status (+ optional rating) on the user's watchlist.
 		async function postToSimkl(payload: ListSyncPayload): Promise<boolean> {
 			const clientId = $getUserPreference("client-id");
-			const accessToken = $getUserPreference("access-token");
+			const accessToken = resolveAccessToken();
 			if (!clientId || !accessToken) {
 				console.log("listsync: missing client-id or access-token, skipping");
 				return false;
@@ -151,7 +157,7 @@ function init() {
 		// POST /sync/history/remove to remove the media from the watchlist + history.
 		async function removeFromSimkl(payload: { movies: { ids: Record<string, number> }[]; shows: { ids: Record<string, number> }[] }): Promise<boolean> {
 			const clientId = $getUserPreference("client-id");
-			const accessToken = $getUserPreference("access-token");
+			const accessToken = resolveAccessToken();
 			if (!clientId || !accessToken) {
 				console.log("listsync: missing client-id or access-token, skipping");
 				return false;
@@ -286,6 +292,199 @@ function init() {
 			} catch (err) {
 				console.error(`listsync: delete sync error -> ${(err as Error).message}`);
 			}
+		});
+
+		// ------------------------------------------------------------------
+		// SIMKL login tray (PIN/device flow)
+		//
+		// SIMKL disabled urn:ietf:wg:oauth:2.0:oob, so we use the PIN flow:
+		//   GET  /oauth/pin            -> { user_code, verification_uri, interval, expires_in }
+		//   GET  /oauth/pin/<code>     -> { result: "OK", access_token } | { result: "KO", ... }
+		// The token is persisted to $storage so the sync functions pick it up.
+		// ------------------------------------------------------------------
+
+		const STORAGE_ACCESS_TOKEN = "listsync.accessToken";
+
+		const TRAY_ICON = "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/icon.png";
+
+		const tray = ctx.newTray({
+			iconUrl: TRAY_ICON,
+			withContent: true,
+			width: "30rem",
+		});
+
+		const loginState = {
+			pin: ctx.state<string | null>(null),
+			status: ctx.state<string>(""),
+			polling: ctx.state<boolean>(false),
+			connected: ctx.state<boolean>(!!resolveAccessToken()),
+		};
+
+		let pollCancel: (() => void) | null = null;
+
+		function cancelPolling(): void {
+			if (pollCancel) {
+				pollCancel();
+				pollCancel = null;
+			}
+		}
+
+		// Start the PIN flow: request a user code, show it, then poll until authorized.
+		async function startLogin(): Promise<void> {
+			const clientId = $getUserPreference("client-id");
+			if (!clientId) {
+				loginState.status.set("Set your Client ID in the extension settings first.");
+				tray.update();
+				return;
+			}
+
+			cancelPolling();
+			loginState.status.set("Requesting PIN...");
+			loginState.pin.set(null);
+			loginState.polling.set(true);
+			tray.update();
+
+			try {
+				const res = await fetch(`${SIMKL_API_BASE}/oauth/pin?client_id=${encodeURIComponent(clientId)}&app-name=listsync&app-version=1.0`);
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const data = res.json() as { user_code: string; interval: number; expires_in: number; verification_uri?: string };
+
+				if (!data.user_code) throw new Error("Invalid response from SIMKL");
+
+				loginState.pin.set(data.user_code);
+				loginState.status.set(`Enter the PIN at simkl.com/pin — valid for ${Math.round((data.expires_in ?? 900) / 60)} min`);
+				tray.update();
+
+				const intervalMs = (data.interval ?? 5) * 1000;
+				pollCancel = ctx.setInterval(() => {
+					poll(clientId, data.user_code);
+				}, intervalMs);
+			} catch (err) {
+				loginState.status.set(`Error: ${(err as Error).message}`);
+				loginState.polling.set(false);
+				tray.update();
+			}
+		}
+
+		// Poll for authorization. Stops on success, expiry, or error.
+		async function poll(clientId: string, userCode: string): Promise<void> {
+			try {
+				const res = await fetch(`${SIMKL_API_BASE}/oauth/pin/${encodeURIComponent(userCode)}?client_id=${encodeURIComponent(clientId)}`);
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				const data = res.json() as { result?: string; access_token?: string; message?: string };
+
+				if (data.result === "OK" && data.access_token) {
+					$storage.set(STORAGE_ACCESS_TOKEN, data.access_token);
+					cancelPolling();
+					loginState.pin.set(null);
+					loginState.polling.set(false);
+					loginState.connected.set(true);
+					loginState.status.set("Connected! Your watchlist will sync now.");
+					tray.update();
+					return;
+				}
+
+				// device_code presence in the poll response means the code was consumed or expired.
+				if (data.result === "KO") {
+					loginState.status.set("Waiting for authorization...");
+					tray.update();
+				}
+			} catch (err) {
+				cancelPolling();
+				loginState.polling.set(false);
+				loginState.status.set(`Polling error: ${(err as Error).message}`);
+				tray.update();
+			}
+		}
+
+		// Clear the token from $storage (keeps the config field intact if set).
+		function disconnect(): void {
+			$storage.remove(STORAGE_ACCESS_TOKEN);
+			cancelPolling();
+			loginState.pin.set(null);
+			loginState.polling.set(false);
+			loginState.connected.set(false);
+			loginState.status.set("Disconnected. Token cleared.");
+			tray.update();
+		}
+
+		// Render the tray content. Re-invoked after every tray.update().
+		tray.render(() => {
+			const items: any[] = [];
+
+			items.push(
+				tray.text("SIMKL Sync", { className: "font-semibold text-lg" }),
+				tray.text("Connect your SIMKL account to enable watchlist syncing.", { className: "text-sm opacity-70" })
+			);
+
+			const connected = loginState.connected.get();
+
+			if (connected) {
+				items.push(
+					tray.badge("Connected", { intent: "success" }),
+					tray.flex(
+						[
+							tray.button("Sync library now", {
+								intent: "primary",
+								onClick: ctx.eventHandler("listsync:tray:backfill", () => {
+									$storage.remove(STORAGE_BACKFILL_DONE);
+									syncEntries().catch((err) => {
+										loginState.status.set(`Backfill error: ${(err as Error).message}`);
+										tray.update();
+									});
+								}),
+							}),
+							tray.button("Disconnect", {
+								intent: "danger-subtle",
+								onClick: ctx.eventHandler("listsync:tray:disconnect", () => disconnect()),
+							}),
+						],
+						{ gap: 8 }
+					)
+				);
+			} else {
+				const pin = loginState.pin.get();
+
+				if (!pin) {
+					items.push(
+						tray.button("Connect to SIMKL", {
+							intent: "primary",
+							size: "md",
+							loading: loginState.polling.get(),
+							onClick: ctx.eventHandler("listsync:tray:login", () => startLogin()),
+						})
+					);
+				} else {
+					items.push(
+						tray.text("Enter this code on the SIMKL website:", { className: "text-sm opacity-70" }),
+						tray.text(pin, {
+							className: "text-center font-bold text-2xl tracking-widest select-all",
+							style: { userSelect: "all", letterSpacing: "0.5rem" },
+						}),
+						tray.anchor({
+							text: "Open simkl.com/pin →",
+							href: "https://simkl.com/pin",
+							target: "_blank",
+						}),
+						tray.button("Cancel", {
+							intent: "gray-subtle",
+							onClick: ctx.eventHandler("listsync:tray:cancel", () => {
+								cancelPolling();
+								loginState.pin.set(null);
+								loginState.polling.set(false);
+								loginState.status.set("");
+								tray.update();
+							}),
+						})
+					);
+				}
+			}
+
+			if (loginState.status.get()) {
+				items.push(tray.text(loginState.status.get(), { className: "text-xs opacity-60" }));
+			}
+
+			return tray.stack(items, { gap: 10 });
 		});
 	});
 }
