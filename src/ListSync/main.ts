@@ -895,8 +895,8 @@ function init() {
 					items: [
 						tray.tabsList({
 							items: [
-								tray.tabsTrigger({ value: "sync", item: "Sync" }),
-								tray.tabsTrigger({ value: "activity", item: "Activity" }),
+								tray.tabsTrigger({ value: "sync", item: tray.text("Sync") }),
+								tray.tabsTrigger({ value: "activity", item: tray.text("Activity") }),
 							],
 						}),
 						tray.tabsContent({
