@@ -27,6 +27,7 @@ interface SimklItem {
     year?: number
     type?: string
     endpoint_type?: string
+    anime_type?: string
     ids?: SimklIds
     poster?: string
     fanart?: string
@@ -159,7 +160,12 @@ class Provider implements CustomSource {
         const t = String(item?.type ?? item?.endpoint_type ?? "").toLowerCase()
         if (t === "movie") return "movie"
         if (t === "anime" || t === "ona") return "anime"
+        if (item?.anime_type) return "anime"
         return "tv"
+    }
+
+    private detailEndpoint(type: SimklMediaType): string {
+        return type === "movie" ? "/movies" : type === "anime" ? "/anime" : "/tv"
     }
 
     private format(type: SimklMediaType): string {
@@ -474,12 +480,17 @@ class Provider implements CustomSource {
         const unique = Array.from(new Set(ids.filter((x) => x > 0)))
         if (unique.length === 0) return ret
 
+        const mediaCache = $store.get<Record<number, $app.AL_BaseAnime>>("simkl.media") ?? {}
+
         const promises = unique.map(async (id) => {
             const decoded = this.decodeId(id)
             if (!decoded) return null
             if (this.hideAnime && decoded.type === "anime") return null
 
-            const item = await this.get<SimklItem>(`/${decoded.type}/${decoded.simklId}`, { extended: "full" })
+            const cached = mediaCache[id]
+            if (cached) return cached
+
+            const item = await this.get<SimklItem>(`${this.detailEndpoint(decoded.type)}/${decoded.simklId}`, { extended: "full" })
             if (!item || !item.ids) return null
 
             let epCount = this.episodeCount(item)
@@ -488,16 +499,21 @@ class Provider implements CustomSource {
                 epCount = info?.counts?.[decoded.season] ?? epCount
             }
 
-            return this.toALBaseAnime(item, {
+            const base = this.toALBaseAnime(item, {
                 type: decoded.type,
                 season: decoded.season,
                 episodeCount: decoded.type === "movie" ? 1 : epCount,
             })
+            if (base) mediaCache[id] = base
+            return base
         })
 
         const results = await Promise.all(promises)
         for (const r of results) {
             if (r) ret.push(r)
+        }
+        if (Object.keys(mediaCache).length > 0) {
+            $store.set("simkl.media", mediaCache)
         }
         return ret
     }
@@ -518,7 +534,7 @@ class Provider implements CustomSource {
         const title = this.titleOf(id)
 
         if (decoded.type === "movie") {
-            const movie = await this.get<SimklItem>(`/movie/${decoded.simklId}`, { extended: "full" })
+            const movie = await this.get<SimklItem>(`${this.detailEndpoint("movie")}/${decoded.simklId}`, { extended: "full" })
             if (movie && movie.ids) {
                 const metadata = this.buildMovieMetadata(movie)
                 metadataCache[id] = metadata
@@ -557,7 +573,7 @@ class Provider implements CustomSource {
         const decoded = this.decodeId(id)
         if (this.hideAnime && decoded?.type === "anime") throw new Error("not found.")
         if (decoded) {
-            const item = await this.get<SimklItem>(`/${decoded.type}/${decoded.simklId}`, { extended: "full" })
+            const item = await this.get<SimklItem>(`${this.detailEndpoint(decoded.type)}/${decoded.simklId}`, { extended: "full" })
             if (item && item.ids) {
                 let epCount = this.episodeCount(item)
                 if (decoded.type !== "movie") {
@@ -605,6 +621,7 @@ class Provider implements CustomSource {
                     if (!item) continue
                     const simklId = this.idOf(item)
                     if (!simklId) continue
+                    if (this.hideAnime && this.typeOf(item) === "anime") continue
 
                     const seasons = entry?.seasons ?? []
                     if (seasons.length > 0) {
