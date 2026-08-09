@@ -94,6 +94,7 @@ const ANIME_OFFSET = 3000000000
 class Provider implements CustomSource {
     private clientId = "{{client-id}}"
     private accessToken = "{{access-token}}"
+    private hideAnime = String("{{hide-anime}}") === "true"
 
     getSettings(): Settings {
         return {
@@ -304,6 +305,7 @@ class Provider implements CustomSource {
     }
 
     private async itemToCards(item: SimklItem, type: SimklMediaType): Promise<$app.AL_BaseAnime[]> {
+        if (this.hideAnime && type === "anime") return []
         const simklId = this.idOf(item)
         if (!simklId) return []
 
@@ -331,6 +333,7 @@ class Provider implements CustomSource {
         const seen = new Set<number>()
         for (const item of items) {
             const type = forcedType ?? this.typeOf(item)
+            if (this.hideAnime && type === "anime") continue
             const cards = await this.itemToCards(item, type)
             for (const m of cards) this.pushMedia(media, seen, m)
         }
@@ -474,6 +477,7 @@ class Provider implements CustomSource {
         const promises = unique.map(async (id) => {
             const decoded = this.decodeId(id)
             if (!decoded) return null
+            if (this.hideAnime && decoded.type === "anime") return null
 
             const item = await this.get<SimklItem>(`/${decoded.type}/${decoded.simklId}`, { extended: "full" })
             if (!item || !item.ids) return null
@@ -509,6 +513,7 @@ class Provider implements CustomSource {
 
         const decoded = this.decodeId(id)
         if (!decoded) return null
+        if (this.hideAnime && decoded.type === "anime") return null
 
         const title = this.titleOf(id)
 
@@ -550,6 +555,7 @@ class Provider implements CustomSource {
         }
 
         const decoded = this.decodeId(id)
+        if (this.hideAnime && decoded?.type === "anime") throw new Error("not found.")
         if (decoded) {
             const item = await this.get<SimklItem>(`/${decoded.type}/${decoded.simklId}`, { extended: "full" })
             if (item && item.ids) {
@@ -615,11 +621,13 @@ class Provider implements CustomSource {
                     }
                 }
 
-                for (const entry of wl.anime ?? []) {
-                    const item = entry?.show
-                    if (!item) continue
-                    const cards = await this.itemToCards(item, "anime")
-                    for (const m of cards) this.pushMedia(media, seen, m)
+                if (!this.hideAnime) {
+                    for (const entry of wl.anime ?? []) {
+                        const item = entry?.show
+                        if (!item) continue
+                        const cards = await this.itemToCards(item, "anime")
+                        for (const m of cards) this.pushMedia(media, seen, m)
+                    }
                 }
 
                 $store.set("simkl.media", this.toIdMap(media))
@@ -627,16 +635,24 @@ class Provider implements CustomSource {
             }
         }
 
-        // Fallback: trending anime
+        // Fallback: trending (anime unless hidden, else tv + movies)
         if (search.trim() === "") {
-            const trending = await this.get<SimklItem[]>("/anime/trending/", { extended: "overview,metadata,tmdb,genres,trailer" })
-            const media = await this.itemsToMedia(trending ?? [], "anime")
+            const media = this.hideAnime
+                ? await (async () => {
+                    const [tv, movies] = await Promise.all([
+                        this.get<SimklItem[]>("/tv/trending/", { extended: "overview,metadata,tmdb,genres,trailer" }),
+                        this.get<SimklItem[]>("/movies/trending/", { extended: "overview,metadata,tmdb,genres,trailer" }),
+                    ])
+                    return this.itemsToMedia([...(tv ?? []), ...(movies ?? [])])
+                })()
+                : await this.itemsToMedia((await this.get<SimklItem[]>("/anime/trending/", { extended: "overview,metadata,tmdb,genres,trailer" })) ?? [], "anime")
             $store.set("simkl.media", this.toIdMap(media))
             return { media: media, total: media.length, page: 1, totalPages: 1 }
         }
 
-        // Search across anime, tv and movie
-        const queries: Promise<SimklItem[] | null>[] = ["anime", "tv", "movie"].map((t) =>
+        // Search across anime (unless hidden), tv and movie
+        const types = this.hideAnime ? ["tv", "movie"] : ["anime", "tv", "movie"]
+        const queries: Promise<SimklItem[] | null>[] = types.map((t) =>
             this.get<SimklItem[]>(`/search/${t}`, {
                 q: search,
                 page: String(page),

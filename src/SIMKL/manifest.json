@@ -1,7 +1,7 @@
 {
   "id": "simklv2",
   "name": "Simkl V2",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/manifest.json",
   "language": "typescript",
   "type": "custom-source",
@@ -27,6 +27,12 @@
         "label": "Access Token (optional, enables your watchlist)",
         "type": "text",
         "default": ""
+      },
+      {
+        "name": "hide-anime",
+        "label": "Hide anime from results",
+        "type": "switch",
+        "default": "true"
       }
     ]
   }
