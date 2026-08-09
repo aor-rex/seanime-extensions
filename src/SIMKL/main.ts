@@ -111,9 +111,9 @@ type SimklMediaType = "movie" | "tv" | "anime"
 
 const API_BASE = "https://api.simkl.com"
 
-const MOVIE_OFFSET = 1000000000
-const TV_OFFSET = 2000000000
-const ANIME_OFFSET = 3000000000
+const MOVIE_OFFSET = 10000000000
+const TV_OFFSET = 20000000000
+const ANIME_OFFSET = 30000000000
 
 class Provider implements CustomSource {
     private clientId = "{{client-id}}"
@@ -274,9 +274,9 @@ class Provider implements CustomSource {
     }
 
     // ---------------------------------------------------------------- ID scheme
-    // movie  -> 1000000000 + simklId
-    // tv     -> 2000000000 + simklId * 1000 + seasonNumber
-    // anime  -> 3000000000 + simklId * 1000 + seasonNumber
+    // movie  -> 10000000000 + simklId
+    // tv     -> 20000000000 + simklId * 1000 + seasonNumber
+    // anime  -> 30000000000 + simklId * 1000 + seasonNumber
 
     private encodeId(type: SimklMediaType, simklId: number, season: number): number {
         const id = Number(simklId)
