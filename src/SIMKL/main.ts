@@ -168,13 +168,13 @@ class Provider implements CustomSource {
     }
 
     private posterUrl(poster: string | undefined): string {
-        if (!poster) return ""
+        if (typeof poster !== "string" || !poster) return ""
         if (poster.startsWith("http")) return poster
         return `https://simkl.in/posters/${poster}_m.webp`
     }
 
     private posterUrlBanner(poster: string | undefined): string {
-        if (!poster) return ""
+        if (typeof poster !== "string" || !poster) return ""
         if (poster.startsWith("http")) return poster
         return `https://simkl.in/posters/${poster}_w.jpg`
     }
@@ -202,15 +202,35 @@ class Provider implements CustomSource {
         return "FINISHED"
     }
 
+    private num(v: any): number | undefined {
+        if (v === null || v === undefined || v === "") return undefined
+        const n = Number(v)
+        return isNaN(n) ? undefined : n
+    }
+
+    private str(v: any): string {
+        return v === null || v === undefined ? "" : String(v)
+    }
+
+    private strArray(v: any): string[] {
+        if (!Array.isArray(v)) return []
+        return v.filter((x) => typeof x === "string")
+    }
+
+    private bool(v: any): boolean {
+        return v === true || String(v).toLowerCase() === "true"
+    }
+
     private meanScore(item: SimklItem): number {
-        const r = item?.ratings?.simkl?.rating
+        const r = this.num(item?.ratings?.simkl?.rating)
         return r ? Math.round(r * 10) : 0
     }
 
     private parseDate(dateStr: string | undefined, year: number): { year: number; month?: number; day?: number } {
-        if (!dateStr) return { year: year || 0 }
+        const y = this.num(year) ?? 0
+        if (!dateStr) return { year: y }
         const d = new Date(dateStr)
-        if (isNaN(d.getTime())) return { year: year || 0 }
+        if (isNaN(d.getTime())) return { year: y }
         return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() }
     }
 
@@ -326,7 +346,7 @@ class Provider implements CustomSource {
         const simklId = this.idOf(item)
         if (!simklId) return null
 
-        const baseTitle = item.title ?? ""
+        const baseTitle = this.str(item.title)
         const season = opts.season
         const title = season > 1 ? `${baseTitle} — Season ${season}` : baseTitle
         const type = opts.type
@@ -338,7 +358,7 @@ class Provider implements CustomSource {
             title: {
                 userPreferred: title,
                 romaji: title,
-                english: item.title_en ?? item.en_title ?? title,
+                english: this.str(item.title_en ?? item.en_title ?? title),
                 native: baseTitle,
             },
             coverImage: {
@@ -348,21 +368,21 @@ class Provider implements CustomSource {
                 color: "",
             },
             bannerImage: this.posterUrlBanner(item.poster),
-            description: item.overview ?? "",
-            genres: item.genres ?? [],
+            description: this.str(item.overview),
+            genres: this.strArray(item.genres),
             meanScore: this.meanScore(item),
-            synonyms: item.all_titles ?? [],
+            synonyms: this.strArray(item.all_titles),
             status: this.airStatus(item) as $app.AL_MediaStatus,
-            episodes: isMovie ? 1 : (opts.episodeCount > 0 ? opts.episodeCount : 1),
+            episodes: isMovie ? 1 : (this.num(opts.episodeCount) ?? 1),
             type: "ANIME",
             format: this.format(type) as $app.AL_MediaFormat,
-            seasonYear: item.year,
-            isAdult: item.adult ?? false,
-            countryOfOrigin: item.country,
-            duration: item.runtime,
+            seasonYear: this.num(item.year),
+            isAdult: this.bool(item.adult),
+            countryOfOrigin: this.str(item.country),
+            duration: this.num(item.runtime),
             trailer: this.trailerOf(item),
-            startDate: this.parseDate(item.first_aired, item.year ?? 0),
-            endDate: this.parseDate(item.last_aired, item.year ?? 0),
+            startDate: this.parseDate(item.first_aired, this.num(item.year) ?? 0),
+            endDate: this.parseDate(item.last_aired, this.num(item.year) ?? 0),
         }
     }
 
@@ -421,7 +441,7 @@ class Provider implements CustomSource {
     }
 
     private episodeCount(item: SimklItem): number {
-        const c = item?.total_episodes ?? item?.ep_count ?? item?.watching_details?.total_episodes
+        const c = this.num(item?.total_episodes ?? item?.ep_count ?? item?.watching_details?.total_episodes)
         return c && c > 0 ? c : 1
     }
 
@@ -479,7 +499,7 @@ class Provider implements CustomSource {
     }
 
     private buildRankings(item: SimklItem, type: SimklMediaType): $app.AL_AnimeDetailsById_Media_Rankings[] {
-        const rank = item.rank
+        const rank = this.num(item.rank)
         if (!rank) return []
         return [{
             allTime: true,
@@ -487,7 +507,7 @@ class Provider implements CustomSource {
             format: this.format(type) as $app.AL_MediaFormat,
             rank: rank,
             type: "RATED",
-            year: item.year,
+            year: this.num(item.year),
         }]
     }
 
@@ -521,7 +541,7 @@ class Provider implements CustomSource {
     private relationToBase(rel: SimklRelation): $app.AL_BaseAnime | null {
         const parsed = rel?.url ? this.parseSimklUrl(rel.url) : null
         if (!parsed) return null
-        const title = rel.title ?? ""
+        const title = this.str(rel.title)
         const cover = this.posterUrl(rel.poster)
         return {
             id: this.encodeId(parsed.type, parsed.simklId, 1),
@@ -547,9 +567,9 @@ class Provider implements CustomSource {
             episodes: parsed.type === "movie" ? 1 : undefined,
             type: "ANIME",
             format: this.format(parsed.type) as $app.AL_MediaFormat,
-            seasonYear: rel.year,
+            seasonYear: this.num(rel.year),
             isAdult: false,
-            startDate: { year: rel.year ?? 0 },
+            startDate: { year: this.num(rel.year) ?? 0 },
             endDate: undefined,
         }
     }
@@ -581,10 +601,10 @@ class Provider implements CustomSource {
                         id: recId,
                         siteUrl: rec.url,
                         title: {
-                            userPreferred: rec.title ?? "",
-                            romaji: rec.title ?? "",
-                            english: rec.title ?? "",
-                            native: rec.title ?? "",
+                            userPreferred: this.str(rec.title),
+                            romaji: this.str(rec.title),
+                            english: this.str(rec.title),
+                            native: this.str(rec.title),
                         },
                         coverImage: {
                             large: cover,
@@ -593,7 +613,7 @@ class Provider implements CustomSource {
                             color: "",
                         },
                         format: this.format(parsed.type) as $app.AL_MediaFormat,
-                        startDate: { year: rec.year ?? 0 },
+                        startDate: { year: this.num(rec.year) ?? 0 },
                         isAdult: false,
                         meanScore: 0,
                         status: "FINISHED",
@@ -697,10 +717,10 @@ class Provider implements CustomSource {
                 anidbId: 0,
                 tvdbId: 0,
                 anidbEid: 0,
-                title: ep.title ?? `Episode ${rel}`,
+                title: this.str(ep.title) || `Episode ${rel}`,
                 image: image,
                 airDate: ep.date ? new Date(ep.date).toISOString().split("T")[0] : "",
-                length: ep.runtime ?? 0,
+                length: this.num(ep.runtime) ?? 0,
                 summary: ep.description ?? "",
                 overview: ep.description ?? "",
                 episodeNumber: rel,
@@ -724,8 +744,8 @@ class Provider implements CustomSource {
     }
 
     private buildMovieMetadata(movie: SimklItem): $app.Metadata_AnimeMetadata {
-        const title = movie.title ?? "Movie"
-        const overview = movie.overview ?? ""
+        const title = this.str(movie.title) || "Movie"
+        const overview = this.str(movie.overview)
         const airDate = movie.first_aired ? new Date(movie.first_aired).toISOString().split("T")[0] : ""
         const ep: $app.Metadata_EpisodeMetadata = {
             anidbId: 0,
@@ -734,7 +754,7 @@ class Provider implements CustomSource {
             title: title,
             image: this.posterUrl(movie.poster),
             airDate: airDate,
-            length: movie.runtime ?? 90,
+            length: this.num(movie.runtime) ?? 90,
             summary: overview,
             overview: overview,
             episodeNumber: 1,
