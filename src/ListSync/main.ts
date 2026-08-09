@@ -85,7 +85,11 @@ function init() {
 			result: "ok" | "error";
 		}
 
-		const ACTIVITY_KEY = "listsync.activity";
+		// NOTE: the activity array must NOT live at a key that is a prefix of
+		// ACTIVITY_UNREAD_KEY - $storage nests dotted paths, so "listsync.activity"
+		// would clobber/block "listsync.activity.unread". The ".log" suffix keeps
+		// the two keys independent.
+		const ACTIVITY_KEY = "listsync.activity.log";
 		const ACTIVITY_UNREAD_KEY = "listsync.activity.unread";
 		const ACTIVITY_MAX = 50;
 
@@ -228,14 +232,17 @@ function init() {
 		// Pull the user's SIMKL watchlist and write status/score into the target
 		// custom-source lists (SIMKL / TMDB extension) via $anilist.updateEntry.
 		async function pullFromSimkl(): Promise<{ pushed: number; skipped: number }> {
+			console.log("listsync: pull started");
 			const clientId = $getUserPreference("client-id");
 			const accessToken = resolveAccessToken();
 			if (!clientId || !accessToken) {
+				console.log("listsync: pull skipped - missing client-id / access-token");
 				pushActivity("pull", "Reverse sync skipped: set your Client ID / Access Token first", "error");
 				ctx.toast.error("ListSync: set your Client ID and Access Token to pull from SIMKL");
 				return { pushed: 0, skipped: 0 };
 			}
 
+			console.log("listsync: pull resolving target extensions");
 			const target = reverseSyncTarget();
 			const simklExtId = target !== "tmdb" ? findExtIdentifierForHost(SIMKL_HOST) : undefined;
 			const tmdbExtId = target !== "simkl" ? findExtIdentifierForHost(TMDB_HOST) : undefined;
@@ -246,19 +253,28 @@ function init() {
 				return { pushed: 0, skipped: 0 };
 			}
 
-			const res = await fetch(`${SIMKL_API_BASE}/sync/all-items/?extended=full&include_all_episodes=yes`, {
+			// NOTE: include_all_episodes=yes makes the payload enormous for large
+			// watchlists (every episode for every show). We only need season-level
+			// watch state, which all-items returns by default, so we omit it. A
+			// generous timeout also guarantees the fetch can never hang forever.
+			console.log(`listsync: pull fetching watchlist (simklExtId=${simklExtId} tmdbExtId=${tmdbExtId})`);
+			const res = await fetch(`${SIMKL_API_BASE}/sync/all-items/?extended=full`, {
+				timeout: 90,
 				headers: {
 					Authorization: `Bearer ${accessToken}`,
 					"simkl-api-key": clientId,
 				},
 			});
+			console.log(`listsync: pull fetch resolved (status=${res.status})`);
 			if (!res.ok) {
+				console.error(`listsync: pull watchlist HTTP ${res.status}`);
 				pushActivity("pull", `Failed to fetch SIMKL watchlist (HTTP ${res.status})`, "error");
 				ctx.toast.error(`ListSync: failed to fetch watchlist (HTTP ${res.status})`);
 				return { pushed: 0, skipped: 0 };
 			}
 
 			const data = res.json() as { movies?: ReverseItem[]; shows?: ReverseItem[]; anime?: ReverseItem[] };
+			console.log(`listsync: pull parsed ${data.movies?.length ?? 0} movies, ${data.shows?.length ?? 0} shows, ${data.anime?.length ?? 0} anime`);
 
 			const planned: PlannedEntry[] = [];
 			let pushed = 0;
@@ -319,13 +335,35 @@ function init() {
 			$storage.set("listsync.pull.pending", planned.map((p) => p.mediaId));
 			schedulePendingClear();
 
-			for (const entry of planned) {
-				$anilist.updateEntry(entry.mediaId, entry.status, entry.scoreRaw, undefined, undefined, undefined);
+			// Each updateEntry runs synchronously on the UI VM scheduler, so a
+			// large watchlist can keep it busy for a while. Track per-entry
+			// failures and log progress so a stuck/failed update is visible and
+			// one failure doesn't abort the whole pull.
+			console.log(`listsync: pull applying ${planned.length} update(s)`);
+			let failed = 0;
+			const total = planned.length;
+			for (let i = 0; i < total; i++) {
+				const entry = planned[i];
+				try {
+					$anilist.updateEntry(entry.mediaId, entry.status, entry.scoreRaw, undefined, undefined, undefined);
+				} catch (err) {
+					failed++;
+					console.error(`listsync: updateEntry failed for media ${entry.mediaId} -> ${(err as Error).message}`);
+				}
+				if ((i + 1) % 50 === 0 || i + 1 === total) {
+					console.log(`listsync: pull progress ${i + 1}/${total} (${failed} failed)`);
+				}
 			}
+			console.log(`listsync: pull done (applied=${total - failed}, failed=${failed})`);
 
 			if (pushed > 0) {
-				pushActivity("pull", `Pulled ${pushed} item(s) from SIMKL${skipped ? ` (${skipped} skipped)` : ""}`, "ok");
-				ctx.toast.success(`ListSync: pulled ${pushed} item(s) from SIMKL`);
+				if (failed > 0) {
+					pushActivity("pull", `Pulled ${pushed} item(s) from SIMKL${skipped ? ` (${skipped} skipped)` : ""} (${failed} failed)`, "error");
+					ctx.toast.error(`ListSync: pulled ${pushed} item(s), ${failed} update(s) failed`);
+				} else {
+					pushActivity("pull", `Pulled ${pushed} item(s) from SIMKL${skipped ? ` (${skipped} skipped)` : ""}`, "ok");
+					ctx.toast.success(`ListSync: pulled ${pushed} item(s) from SIMKL`);
+				}
 			} else {
 				pushActivity("pull", `Nothing to pull${skipped ? ` (${skipped} skipped)` : ""}`, "ok");
 			}
@@ -603,6 +641,14 @@ function init() {
 		// Restore the badge (unread activity count) on load.
 		updateBadge();
 
+		// One-time migration: older versions stored the activity array at
+		// "listsync.activity", which collided with "listsync.activity.unread".
+		// Move it to "listsync.activity.log" if present.
+		if ($storage.get(ACTIVITY_KEY) == null && Array.isArray($storage.get("listsync.activity"))) {
+			$storage.set(ACTIVITY_KEY, $storage.get("listsync.activity"));
+			$storage.remove("listsync.activity");
+		}
+
 		const loginState = {
 			pin: ctx.state<string | null>(null),
 			status: ctx.state<string>(""),
@@ -708,8 +754,9 @@ function init() {
 		tray.onOpen(() => {
 			markActivityRead();
 			if ($getUserPreference("reverse-sync-auto") === "true" && isEnabled() && resolveAccessToken()) {
-				pullFromSimkl().catch(() => {
-					// errors are already logged via pushActivity
+				pullFromSimkl().catch((err) => {
+					console.error(`listsync: auto-pull failed -> ${(err as Error).message}`);
+					pushActivity("pull", `Auto-pull error: ${(err as Error).message}`, "error");
 				});
 			}
 		});
