@@ -746,6 +746,7 @@ function init() {
 			status: ctx.state<string>(""),
 			polling: ctx.state<boolean>(false),
 			connected: ctx.state<boolean>(!!resolveAccessToken()),
+			token: ctx.state<string | null>(null),
 		};
 
 		let pollCancel: (() => void) | null = null;
@@ -809,9 +810,19 @@ function init() {
 					loginState.pin.set(null);
 					loginState.polling.set(false);
 					loginState.connected.set(true);
-					loginState.status.set("Connected! Your watchlist will sync now.");
+					loginState.token.set(data.access_token);
+					loginState.status.set("Connected! Token copied — paste it into SIMKL V2 settings.");
 					pushActivity("login", "Connected to SIMKL", "ok");
-					ctx.toast.success("ListSync: connected to SIMKL");
+					try {
+						if (navigator.clipboard?.writeText) {
+							await navigator.clipboard.writeText(data.access_token);
+							ctx.toast.success("ListSync: connected. Token copied for SIMKL V2.");
+						} else {
+							ctx.toast.success("ListSync: connected. Copy the token from the tray for SIMKL V2.");
+						}
+					} catch {
+						ctx.toast.success("ListSync: connected. Copy the token from the tray for SIMKL V2.");
+					}
 					tray.update();
 					return;
 				}
@@ -836,6 +847,7 @@ function init() {
 			loginState.pin.set(null);
 			loginState.polling.set(false);
 			loginState.connected.set(false);
+			loginState.token.set(null);
 			loginState.status.set("Disconnected. Token cleared.");
 			pushActivity("login", "Disconnected from SIMKL", "ok");
 			tray.update();
@@ -888,6 +900,33 @@ function init() {
 						{ gap: 8, direction: "column" }
 					)
 				);
+
+				const token = loginState.token.get();
+				if (token) {
+					items.push(
+						tray.text("SIMKL V2 access token:", { className: "text-xs opacity-70" }),
+						tray.flex(
+							[
+								tray.input("Token", { value: token, disabled: true, size: "sm" }),
+								tray.button("Copy", {
+									intent: "gray-subtle",
+									size: "sm",
+									onClick: ctx.eventHandler("listsync:tray:copy-token", () => {
+										try {
+											if (navigator.clipboard?.writeText) {
+												navigator.clipboard.writeText(token);
+												ctx.toast.success("ListSync: token copied to clipboard");
+											}
+										} catch {
+											// clipboard unavailable; the input above is selectable
+										}
+									}),
+								}),
+							],
+							{ gap: 8 }
+						)
+					);
+				}
 			} else {
 				const pin = loginState.pin.get();
 
