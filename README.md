@@ -48,12 +48,18 @@ The bundled `anime-torrent-provider.d.ts` / `core.d.ts` were added (they're miss
 
    Manifest URLs (the fork's raw GitHub links):
 
-   | Extension | Type | Manifest URL |
-   |---|---|---|
-   | **Simkl V2** | custom source | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/manifest.json` |
-   | **TMDB V2** | custom source | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TMDB/manifest.json` |
-   | **ListSync** | plugin | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json` |
-   | EXT / 1337x / YTS / EZTV / TPB / Torrentio | torrent providers | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/<name>/manifest.json` |
+   | Extension | Type | ID | Manifest URL |
+   |---|---|---|---|
+   | **Simkl V2** | custom source | `simklv2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/manifest.json` |
+   | **TMDB V2** | custom source | `tmdbv2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TMDB/manifest.json` |
+   | **ListSync** | plugin | `listsync` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json` |
+   | **UI Translation** | plugin | `ui-translation` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/UI-Translation/manifest.json` |
+   | **EXT Torrents** | torrent provider | `ext` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EXT/manifest.json` |
+   | **1337x** | torrent provider | `l337x` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/1337x/manifest.json` |
+   | **YTS** | torrent provider | `yts` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/YTS/manifest.json` |
+   | **EZTV** | torrent provider | `eztv` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EZTV/manifest.json` |
+   | **ThePirateBay V2** | torrent provider | `thepiratebayv2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TPB/manifest.json` |
+   | **Torrentio V2** | torrent provider | `torrentiov2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json` |
 
 2. SIMKL needs a **Client ID** (from https://simkl.com/settings/developer/) and, for the watchlist, an **Access Token** — generate one with the OAuth helper at `auth/callback.html` (see below).
 
