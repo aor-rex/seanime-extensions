@@ -1,11 +1,11 @@
 {
   "id": "listsync",
   "name": "ListSync",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json",
   "language": "typescript",
   "type": "plugin",
-  "description": "Pushes list status updates (status + score) from TMDB/SIMKL custom-source entries to your SIMKL watchlist.",
+  "description": "Two-way sync between your SIMKL watchlist and TMDB/SIMKL custom-source entries: push status/score to SIMKL and pull your watchlist back into your library.",
   "author": "aor-rex",
   "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/icon.png",
   "website": "https://github.com/aor-rex/seanime-extensions",
@@ -39,6 +39,23 @@
         "label": "Access Token (optional, enables your watchlist)",
         "type": "text",
         "default": ""
+      },
+      {
+        "name": "reverse-sync-target",
+        "label": "Reverse sync target",
+        "type": "select",
+        "default": "simkl",
+        "options": [
+          { "value": "simkl", "label": "SIMKL" },
+          { "value": "tmdb", "label": "TMDB" },
+          { "value": "both", "label": "Both" }
+        ]
+      },
+      {
+        "name": "reverse-sync-auto",
+        "label": "Pull from SIMKL when the tray opens",
+        "type": "switch",
+        "default": "false"
       }
     ]
   },

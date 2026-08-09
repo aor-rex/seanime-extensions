@@ -74,6 +74,264 @@ function init() {
 			shows: ListSyncItem[];
 		}
 
+		// ------------------------------------------------------------------
+		// Activity log
+		// ------------------------------------------------------------------
+
+		interface ActivityEntry {
+			ts: number;
+			action: string;
+			message: string;
+			result: "ok" | "error";
+		}
+
+		const ACTIVITY_KEY = "listsync.activity";
+		const ACTIVITY_UNREAD_KEY = "listsync.activity.unread";
+		const ACTIVITY_MAX = 50;
+
+		function getActivity(): ActivityEntry[] {
+			const raw = $storage.get(ACTIVITY_KEY);
+			return Array.isArray(raw) ? (raw as ActivityEntry[]) : [];
+		}
+
+		function updateBadge(): void {
+			const unread = Number($storage.get(ACTIVITY_UNREAD_KEY)) || 0;
+			const hasErrors = getActivity().some((a) => a.result === "error");
+			tray.updateBadge({ number: unread, intent: hasErrors ? "alert" : "info" });
+		}
+
+		function pushActivity(action: string, message: string, result: "ok" | "error"): void {
+			const entries = getActivity();
+			entries.unshift({ ts: Date.now(), action, message, result });
+			$storage.set(ACTIVITY_KEY, entries.slice(0, ACTIVITY_MAX));
+			$storage.set(ACTIVITY_UNREAD_KEY, (Number($storage.get(ACTIVITY_UNREAD_KEY)) || 0) + 1);
+			updateBadge();
+			tray.update();
+		}
+
+		function markActivityRead(): void {
+			$storage.set(ACTIVITY_UNREAD_KEY, 0);
+			updateBadge();
+		}
+
+		function clearActivity(): void {
+			$storage.set(ACTIVITY_KEY, []);
+			$storage.set(ACTIVITY_UNREAD_KEY, 0);
+			updateBadge();
+			tray.update();
+		}
+
+		// ------------------------------------------------------------------
+		// Reverse sync (SIMKL -> custom-source AniList entries)
+		// ------------------------------------------------------------------
+
+		const REVERSE_SIMKL_STATUS_MAP: Record<string, $app.AL_MediaListStatus> = {
+			plantowatch: "PLANNING",
+			watching: "CURRENT",
+			completed: "COMPLETED",
+			dropped: "DROPPED",
+			hold: "PAUSED",
+		};
+
+		const SIMKL_HOST = "https://simkl.com";
+		const TMDB_HOST = "https://www.themoviedb.org";
+
+		interface ReverseSeason {
+			number?: number;
+		}
+
+		interface ReverseItem {
+			status?: string;
+			user_rating?: number;
+			seasons?: ReverseSeason[];
+			movie?: { ids?: { simkl?: number; tmdb?: number }; title?: string; seasons?: ReverseSeason[] };
+			show?: { ids?: { simkl?: number; tmdb?: number }; title?: string; seasons?: ReverseSeason[] };
+			anime?: { ids?: { simkl?: number; tmdb?: number }; title?: string; seasons?: ReverseSeason[] };
+		}
+
+		interface PlannedEntry {
+			mediaId: number;
+			status: $app.AL_MediaListStatus;
+			scoreRaw?: number;
+		}
+
+		// Build a custom-source media id using Seanime's bit layout:
+		// 2^31 + (extensionIdentifier << 40) + localId.
+		function buildMediaId(extIdentifier: number, localId: number): number {
+			return CUSTOM_SOURCE_OFFSET + extIdentifier * 2 ** 40 + localId;
+		}
+
+		// Encode a local id using the SIMKL / TMDB extension schemes:
+		// movie 1e9+id, tv 2e9+id*1000+season, anime 3e9+id*1000+season.
+		function encodeLocalId(type: "movie" | "tv" | "anime", externalId: number, season: number): number {
+			const n = Number(externalId);
+			if (type === "movie") return 1000000000 + n;
+			const base = type === "anime" ? 3000000000 : 2000000000;
+			const s = Math.max(1, Math.min(season || 1, 999));
+			return base + n * 1000 + s;
+		}
+
+		// Scan the merged collection for a custom-source entry whose real site URL
+		// starts with `host` and return that extension's numeric identifier.
+		function findExtIdentifierForHost(host: string): number | undefined {
+			const collection = $anilist.getAnimeCollection(true);
+			const lists = collection.MediaListCollection?.lists ?? [];
+			for (const list of lists) {
+				for (const entry of list.entries ?? []) {
+					if (entry.id < CUSTOM_SOURCE_OFFSET) continue;
+					const url = entry.media?.siteUrl ?? "";
+					const idx = url.indexOf("|END|");
+					if (idx < 0) continue;
+					if (!url.slice(idx + "|END|".length).startsWith(host)) continue;
+					return Math.floor((entry.id - CUSTOM_SOURCE_OFFSET) / 2 ** 40);
+				}
+			}
+			return undefined;
+		}
+
+		function reverseSyncTarget(): string {
+			const t = $getUserPreference("reverse-sync-target");
+			return t === "tmdb" ? "tmdb" : t === "both" ? "both" : "simkl";
+		}
+
+		function seasonsOf(seasons?: ReverseSeason[]): number[] {
+			if (!Array.isArray(seasons) || seasons.length === 0) return [1];
+			const nums = seasons.map((s) => Number(s?.number)).filter((n) => !isNaN(n) && n > 0);
+			return nums.length > 0 ? nums : [1];
+		}
+
+		// `seasons[]` is item-level watch state, but fall back to the media stub too.
+		function seasonsOfItem(item: ReverseItem): number[] {
+			return seasonsOf(item.seasons ?? item.show?.seasons ?? item.movie?.seasons ?? item.anime?.seasons);
+		}
+
+		let pendingClearTimer: (() => void) | null = null;
+
+		// Clean up the pull-suppression set once the watcher has drained it (or after
+		// a safety timeout, so a stale id never blocks future pushes).
+		function schedulePendingClear(): void {
+			if (pendingClearTimer) pendingClearTimer();
+			const start = Date.now();
+			pendingClearTimer = ctx.setInterval(() => {
+				const pending = $storage.get("listsync.pull.pending");
+				if (Array.isArray(pending) && pending.length > 0 && Date.now() - start < 15000) {
+					return; // keep waiting for the watcher to drain
+				}
+				$storage.remove("listsync.pull.pending");
+				if (pendingClearTimer) {
+					pendingClearTimer();
+					pendingClearTimer = null;
+				}
+			}, 1000);
+		}
+
+		// Pull the user's SIMKL watchlist and write status/score into the target
+		// custom-source lists (SIMKL / TMDB extension) via $anilist.updateEntry.
+		async function pullFromSimkl(): Promise<{ pushed: number; skipped: number }> {
+			const clientId = $getUserPreference("client-id");
+			const accessToken = resolveAccessToken();
+			if (!clientId || !accessToken) {
+				pushActivity("pull", "Reverse sync skipped: set your Client ID / Access Token first", "error");
+				ctx.toast.error("ListSync: set your Client ID and Access Token to pull from SIMKL");
+				return { pushed: 0, skipped: 0 };
+			}
+
+			const target = reverseSyncTarget();
+			const simklExtId = target !== "tmdb" ? findExtIdentifierForHost(SIMKL_HOST) : undefined;
+			const tmdbExtId = target !== "simkl" ? findExtIdentifierForHost(TMDB_HOST) : undefined;
+
+			if (!simklExtId && !tmdbExtId) {
+				pushActivity("pull", "No SIMKL/TMDB entries in your collection yet — add one first", "error");
+				ctx.toast.error("ListSync: add a SIMKL/TMDB entry to your collection before pulling");
+				return { pushed: 0, skipped: 0 };
+			}
+
+			const res = await fetch(`${SIMKL_API_BASE}/sync/all-items/?extended=full&include_all_episodes=yes`, {
+				headers: {
+					Authorization: `Bearer ${accessToken}`,
+					"simkl-api-key": clientId,
+				},
+			});
+			if (!res.ok) {
+				pushActivity("pull", `Failed to fetch SIMKL watchlist (HTTP ${res.status})`, "error");
+				ctx.toast.error(`ListSync: failed to fetch watchlist (HTTP ${res.status})`);
+				return { pushed: 0, skipped: 0 };
+			}
+
+			const data = res.json() as { movies?: ReverseItem[]; shows?: ReverseItem[]; anime?: ReverseItem[] };
+
+			const planned: PlannedEntry[] = [];
+			let pushed = 0;
+			let skipped = 0;
+
+			const plan = (extId: number | undefined, type: "movie" | "tv" | "anime", externalId: number, status: $app.AL_MediaListStatus, scoreRaw: number | undefined, seasons: number[]): void => {
+				if (!extId) return;
+				for (const season of seasons) {
+					const localId = encodeLocalId(type, externalId, season);
+					planned.push({ mediaId: buildMediaId(extId, localId), status, scoreRaw });
+				}
+			};
+
+			const apply = (item: ReverseItem, kind: "movie" | "show" | "anime", simklId: number, tmdbId: number | undefined, seasons: number[]): void => {
+				const status = REVERSE_SIMKL_STATUS_MAP[item.status ?? ""];
+				if (!status) {
+					skipped++;
+					return;
+				}
+				const scoreRaw = typeof item.user_rating === "number" && item.user_rating > 0 ? Math.round(item.user_rating * 10) : undefined;
+
+				if (simklExtId) {
+					plan(simklExtId, kind === "movie" ? "movie" : kind === "anime" ? "anime" : "tv", simklId, status, scoreRaw, seasons);
+				}
+				if (tmdbExtId && tmdbId) {
+					plan(tmdbExtId, kind === "movie" ? "movie" : "tv", tmdbId, status, scoreRaw, seasons);
+				}
+				pushed++;
+			};
+
+			for (const item of data.movies ?? []) {
+				const id = item.movie?.ids?.simkl;
+				if (!id) {
+					skipped++;
+					continue;
+				}
+				apply(item, "movie", id, item.movie?.ids?.tmdb, [1]);
+			}
+			for (const item of data.shows ?? []) {
+				const id = item.show?.ids?.simkl;
+				if (!id) {
+					skipped++;
+					continue;
+				}
+				apply(item, "show", id, item.show?.ids?.tmdb, seasonsOfItem(item));
+			}
+			for (const item of data.anime ?? []) {
+				const id = item.anime?.ids?.simkl;
+				if (!id) {
+					skipped++;
+					continue;
+				}
+				apply(item, "anime", id, item.anime?.ids?.tmdb, seasonsOfItem(item));
+			}
+
+			// Register the suppression set BEFORE firing any updateEntry, so the
+			// asynchronous POST_UPDATE_ENTRY watcher skips these media ids.
+			$storage.set("listsync.pull.pending", planned.map((p) => p.mediaId));
+			schedulePendingClear();
+
+			for (const entry of planned) {
+				$anilist.updateEntry(entry.mediaId, entry.status, entry.scoreRaw, undefined, undefined, undefined);
+			}
+
+			if (pushed > 0) {
+				pushActivity("pull", `Pulled ${pushed} item(s) from SIMKL${skipped ? ` (${skipped} skipped)` : ""}`, "ok");
+				ctx.toast.success(`ListSync: pulled ${pushed} item(s) from SIMKL`);
+			} else {
+				pushActivity("pull", `Nothing to pull${skipped ? ` (${skipped} skipped)` : ""}`, "ok");
+			}
+			return { pushed, skipped };
+		}
+
 		// Parse the real site URL out of a normalized custom-source siteUrl of the form
 		// `ext_custom_source_<extId>|END|<realSiteUrl>` and resolve the external id.
 		function parseExternalId(siteUrl: string, format?: string): ResolvedExternalId | undefined {
@@ -107,16 +365,6 @@ function init() {
 		// Master on/off toggle. Defaults to on when unset.
 		function isEnabled(): boolean {
 			return $getUserPreference("enable-sync") !== "false";
-		}
-
-		// Resolve the external id for a media id (custom-source ids resolve through the extension).
-		function resolveExternalId(mediaId: number): ResolvedExternalId | undefined {
-			const media = $anilist.getAnime(mediaId);
-			if (!media || !media.siteUrl) {
-				console.log(`listsync: media not found (${mediaId}), skipping`);
-				return undefined;
-			}
-			return parseExternalId(media.siteUrl, media.format);
 		}
 
 		// Resolve the external id for a collection entry's media without a fresh lookup.
@@ -193,7 +441,7 @@ function init() {
 
 		// Backfill the whole custom-source library: push current status + score for every
 		// custom-source collection entry in a single batched add-to-list request.
-		async function syncEntries(): Promise<void> {
+		async function syncEntries(): Promise<{ movies: number; shows: number }> {
 			const collection = $anilist.getAnimeCollection(false);
 			const lists = collection.MediaListCollection?.lists ?? [];
 
@@ -218,17 +466,29 @@ function init() {
 				}
 			}
 
-			if (payload.movies.length === 0 && payload.shows.length === 0) {
+			const total = payload.movies.length + payload.shows.length;
+			if (total === 0) {
 				console.log("listsync: backfill found no custom-source entries to sync");
-				return;
+				return { movies: 0, shows: 0 };
 			}
 
-			await postToSimkl(payload);
+			const ok = await postToSimkl(payload);
+			if (ok) {
+				pushActivity("sync", `Pushed ${total} item(s) to SIMKL`, "ok");
+				ctx.toast.success(`ListSync: pushed ${total} item(s) to SIMKL`);
+			} else {
+				pushActivity("sync", `Failed to push ${total} item(s) to SIMKL`, "error");
+				ctx.toast.error("ListSync: failed to push library to SIMKL");
+			}
+			return { movies: payload.movies.length, shows: payload.shows.length };
 		}
 
 		// Push the status change to SIMKL.
 		async function pushStatus(data: { mediaId: number; status?: string; scoreRaw?: number }): Promise<void> {
-			const external = resolveExternalId(data.mediaId);
+			const media = $anilist.getAnime(data.mediaId);
+			if (!media || !media.siteUrl) return;
+
+			const external = parseExternalId(media.siteUrl, media.format);
 			if (!external) return;
 
 			const item = buildAddItem({ status: data.status ?? "", scoreRaw: data.scoreRaw, ids: external.ids });
@@ -237,7 +497,14 @@ function init() {
 			const payload: ListSyncPayload = { movies: [], shows: [] };
 			payload[external.category].push(item);
 
-			await postToSimkl(payload);
+			const ok = await postToSimkl(payload);
+			const title = media.title?.userPreferred ?? media.title?.english ?? String(data.mediaId);
+			if (ok) {
+				pushActivity("status", `"${title}" → ${data.status ?? "no status"}`, "ok");
+			} else {
+				pushActivity("status", `Failed to sync "${title}"`, "error");
+				ctx.toast.error(`ListSync: failed to sync "${title}"`);
+			}
 		}
 
 		// Manual backfill: toggling "run-backfill" on reloads the plugin, so on init
@@ -271,6 +538,15 @@ function init() {
 			if (!data || data.mediaId !== e.mediaId) return;
 			$store.set("PRE_UPDATE_ENTRY_DATA", null);
 
+			// Skip entries written by a reverse-sync pull so they don't get pushed back
+			// to SIMKL (they came FROM there).
+			const pending = $storage.get("listsync.pull.pending");
+			if (Array.isArray(pending) && pending.includes(e.mediaId)) {
+				const remaining = pending.filter((id) => id !== e.mediaId);
+				$storage.set("listsync.pull.pending", remaining);
+				return;
+			}
+
 			try {
 				await pushStatus({ mediaId: data.mediaId!, status: data.status, scoreRaw: data.scoreRaw });
 			} catch (err) {
@@ -283,12 +559,23 @@ function init() {
 			if (!e.mediaId || e.mediaId < CUSTOM_SOURCE_OFFSET) return;
 
 			try {
-				const external = resolveExternalId(e.mediaId);
+				const media = $anilist.getAnime(e.mediaId);
+				if (!media || !media.siteUrl) return;
+
+				const external = parseExternalId(media.siteUrl, media.format);
 				if (!external) return;
 
 				const payload = { movies: [], shows: [] } as { movies: { ids: Record<string, number> }[]; shows: { ids: Record<string, number> }[] };
 				payload[external.category].push({ ids: external.ids });
-				await removeFromSimkl(payload);
+				const ok = await removeFromSimkl(payload);
+
+				const title = media.title?.userPreferred ?? media.title?.english ?? String(e.mediaId);
+				if (ok) {
+					pushActivity("delete", `Removed "${title}" from SIMKL`, "ok");
+				} else {
+					pushActivity("delete", `Failed to remove "${title}" from SIMKL`, "error");
+					ctx.toast.error(`ListSync: failed to remove "${title}" from SIMKL`);
+				}
 			} catch (err) {
 				console.error(`listsync: delete sync error -> ${(err as Error).message}`);
 			}
@@ -310,8 +597,11 @@ function init() {
 		const tray = ctx.newTray({
 			iconUrl: TRAY_ICON,
 			withContent: true,
-			width: "30rem",
+			width: "32rem",
 		});
+
+		// Restore the badge (unread activity count) on load.
+		updateBadge();
 
 		const loginState = {
 			pin: ctx.state<string | null>(null),
@@ -362,6 +652,8 @@ function init() {
 			} catch (err) {
 				loginState.status.set(`Error: ${(err as Error).message}`);
 				loginState.polling.set(false);
+				pushActivity("login", `Login error: ${(err as Error).message}`, "error");
+				ctx.toast.error(`ListSync: ${(err as Error).message}`);
 				tray.update();
 			}
 		}
@@ -380,6 +672,8 @@ function init() {
 					loginState.polling.set(false);
 					loginState.connected.set(true);
 					loginState.status.set("Connected! Your watchlist will sync now.");
+					pushActivity("login", "Connected to SIMKL", "ok");
+					ctx.toast.success("ListSync: connected to SIMKL");
 					tray.update();
 					return;
 				}
@@ -405,18 +699,23 @@ function init() {
 			loginState.polling.set(false);
 			loginState.connected.set(false);
 			loginState.status.set("Disconnected. Token cleared.");
+			pushActivity("login", "Disconnected from SIMKL", "ok");
 			tray.update();
 		}
 
-		// Render the tray content. Re-invoked after every tray.update().
-		tray.render(() => {
+		// Opening the tray clears the unread badge. If auto-reverse-sync is enabled,
+		// pull the SIMKL watchlist down into the custom-source lists.
+		tray.onOpen(() => {
+			markActivityRead();
+			if ($getUserPreference("reverse-sync-auto") === "true" && isEnabled() && resolveAccessToken()) {
+				pullFromSimkl().catch(() => {
+					// errors are already logged via pushActivity
+				});
+			}
+		});
+
+		function syncTabItems(): any[] {
 			const items: any[] = [];
-
-			items.push(
-				tray.text("SIMKL Sync", { className: "font-semibold text-lg" }),
-				tray.text("Connect your SIMKL account to enable watchlist syncing.", { className: "text-sm opacity-70" })
-			);
-
 			const connected = loginState.connected.get();
 
 			if (connected) {
@@ -434,12 +733,20 @@ function init() {
 									});
 								}),
 							}),
+							tray.button("Pull from SIMKL", {
+								intent: "success",
+								onClick: ctx.eventHandler("listsync:tray:pull", () => {
+									pullFromSimkl().catch((err) => {
+										pushActivity("pull", `Pull error: ${(err as Error).message}`, "error");
+									});
+								}),
+							}),
 							tray.button("Disconnect", {
 								intent: "danger-subtle",
 								onClick: ctx.eventHandler("listsync:tray:disconnect", () => disconnect()),
 							}),
 						],
-						{ gap: 8 }
+						{ gap: 8, direction: "column" }
 					)
 				);
 			} else {
@@ -483,6 +790,79 @@ function init() {
 			if (loginState.status.get()) {
 				items.push(tray.text(loginState.status.get(), { className: "text-xs opacity-60" }));
 			}
+
+			return items;
+		}
+
+		function activityTabItems(): any[] {
+			const items: any[] = [];
+			const activity = getActivity();
+
+			if (activity.length === 0) {
+				items.push(tray.text("No activity yet. Sync your library or pull from SIMKL to get started.", { className: "text-sm opacity-60" }));
+				return items;
+			}
+
+			for (const entry of activity.slice(0, 10)) {
+				const d = new Date(entry.ts);
+				const stamp = `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")} ${d.toLocaleDateString()}`;
+				items.push(
+					tray.stack(
+						[
+							tray.flex(
+								[
+									tray.badge(entry.result === "ok" ? "OK" : "ERR", {
+										intent: entry.result === "ok" ? "success" : "alert",
+										size: "sm",
+									}),
+									tray.text(entry.action, { className: "text-xs font-medium" }),
+									tray.text(stamp, { className: "text-xs opacity-50" }),
+								],
+								{ gap: 8 }
+							),
+							tray.text(entry.message, { className: "text-xs opacity-70" }),
+						],
+						{ gap: 2 }
+					)
+				);
+			}
+
+			items.push(
+				tray.button("Clear log", {
+					intent: "gray-subtle",
+					size: "sm",
+					onClick: ctx.eventHandler("listsync:tray:clear-activity", () => clearActivity()),
+				})
+			);
+
+			return items;
+		}
+
+		// Render the tray content. Re-invoked after every tray.update().
+		tray.render(() => {
+			const items: any[] = [
+				tray.text("ListSync", { className: "font-semibold text-lg" }),
+				tray.text("Keep your TMDB / SIMKL library in sync with your SIMKL watchlist.", { className: "text-sm opacity-70" }),
+				tray.tabs({
+					defaultValue: "sync",
+					items: [
+						tray.tabsList({
+							items: [
+								tray.tabsTrigger({ value: "sync", item: "Sync" }),
+								tray.tabsTrigger({ value: "activity", item: "Activity" }),
+							],
+						}),
+						tray.tabsContent({
+							value: "sync",
+							items: syncTabItems(),
+						}),
+						tray.tabsContent({
+							value: "activity",
+							items: activityTabItems(),
+						}),
+					],
+				}),
+			];
 
 			return tray.stack(items, { gap: 10 });
 		});

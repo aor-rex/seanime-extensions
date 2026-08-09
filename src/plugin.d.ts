@@ -36,6 +36,16 @@ declare namespace $ui {
          * Creates a new tray icon.
          */
         newTray(options: TrayOptions): Tray
+
+        /**
+         * Show a toast notification.
+         */
+        toast: {
+            success(message: string): void
+            error(message: string): void
+            info(message: string): void
+            warning(message: string): void
+        }
     }
 
     interface State<T> {
@@ -103,6 +113,18 @@ declare namespace $ui {
 
         /** Closes the tray */
         close(): void
+
+        /**
+         * Sets the badge shown next to the tray icon. A number of 0 hides it.
+         * @param props - { number: count, intent?: "info" | "success" | "alert" | "gray" | "empty" }
+         */
+        updateBadge(props: { number: number, intent?: "info" | "success" | "alert" | "gray" | "empty" }): void
+
+        /** Registers a callback invoked when the tray is opened. */
+        onOpen(fn: () => void): void
+
+        /** Registers a callback invoked when the tray is closed. */
+        onClose(fn: () => void): void
     }
 
     type ComponentProps = {
@@ -310,10 +332,27 @@ declare namespace $anilist {
      * Get the user's anime collection.
      */
     function getAnimeCollection(cached?: boolean): $app.AL_AnimeCollection
+
+    /**
+     * Update a media list entry. Status and score are optional; pass undefined to leave them unchanged.
+     */
+    function updateEntry(
+        mediaId: number,
+        status: $app.AL_MediaListStatus | undefined,
+        scoreRaw: number | undefined,
+        progress: number | undefined,
+        startedAt: $app.AL_FuzzyDateInput | undefined,
+        completedAt: $app.AL_FuzzyDateInput | undefined,
+    ): void
+
+    /**
+     * Delete a media list entry.
+     */
+    function deleteEntry(mediaId: number): void
 }
 
 declare namespace $storage {
-    function get(key: string): string
-    function set(key: string, value: string): void
+    function get(key: string): any
+    function set(key: string, value: any): void
     function remove(key: string): void
 }
