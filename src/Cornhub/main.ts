@@ -77,25 +77,55 @@ class Provider {
         const query = String(opts.query || opts.media.englishTitle || opts.media.romajiTitle || "").trim()
         if (!query) return []
 
-        const url = `${this._baseUrl()}/video/search?search=${encodeURIComponent(query)}`
-        const html = await this._fetchText(url)
+        const candidates = [query, this._sanitizeQuery(query)]
 
-        if (!html || html.length < 500) return []
-
-        const videos = this._parseSearchPage(html)
         const ret: CornSearchResult[] = []
 
-        for (const video of this._dedupeVideos(videos)) {
-            if (!video.videoId || !video.title) continue
-            ret.push({
-                id: video.videoId,
-                title: video.title,
-                url: video.url,
-                subOrDub: "both",
-            })
+        // Mirrors the community custom source: try multiple URL variants and
+        // swallow per-request failures so a 404 never rejects the whole search.
+        for (const candidate of candidates) {
+            if (!candidate) continue
+
+            const urls = [
+                `${this._baseUrl()}/video/search?search=${encodeURIComponent(candidate)}&page=1`,
+                `${this._baseUrl()}/video/search?search=${encodeURIComponent(candidate)}`,
+            ]
+
+            for (const url of urls) {
+                try {
+                    const html = await this._fetchText(url)
+                    if (!html || html.length < 500) continue
+
+                    const videos = this._parseSearchPage(html)
+
+                    for (const video of this._dedupeVideos(videos)) {
+                        if (!video.videoId || !video.title) continue
+                        ret.push({
+                            id: video.videoId,
+                            title: video.title,
+                            url: video.url,
+                            subOrDub: "both",
+                        })
+                    }
+
+                    if (ret.length > 0) return ret
+                } catch (err) {
+                    // Try the next URL / candidate (pornhub 404s on queries it
+                    // can't resolve, e.g. ones containing "!!").
+                }
+            }
         }
 
         return ret
+    }
+
+    // Strips characters pornhub's search endpoint rejects, keeping only safe
+    // ones. "Hardcore Gangbang!! 4 Spaniard" -> "Hardcore Gangbang 4 Spaniard".
+    private _sanitizeQuery(query: string): string {
+        return String(query || "")
+            .replace(/[^a-zA-Z0-9\s\-_+]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
     }
 
     async findEpisodes(id: string): Promise<CornEpisodeDetails[]> {
