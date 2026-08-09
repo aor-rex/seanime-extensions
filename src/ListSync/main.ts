@@ -813,16 +813,8 @@ function init() {
 					loginState.token.set(data.access_token);
 					loginState.status.set("Connected! Token copied — paste it into SIMKL V2 settings.");
 					pushActivity("login", "Connected to SIMKL", "ok");
-					try {
-						if (navigator.clipboard?.writeText) {
-							await navigator.clipboard.writeText(data.access_token);
-							ctx.toast.success("ListSync: connected. Token copied for SIMKL V2.");
-						} else {
-							ctx.toast.success("ListSync: connected. Copy the token from the tray for SIMKL V2.");
-						}
-					} catch {
-						ctx.toast.success("ListSync: connected. Copy the token from the tray for SIMKL V2.");
-					}
+					(ctx as any).dom.clipboard.write(data.access_token);
+					ctx.toast.success("ListSync: connected. Token copied for SIMKL V2.");
 					tray.update();
 					return;
 				}
@@ -901,7 +893,7 @@ function init() {
 					)
 				);
 
-				const token = loginState.token.get();
+				const token = loginState.token.get() ?? resolveAccessToken();
 				if (token) {
 					items.push(
 						tray.text("SIMKL V2 access token:", { className: "text-xs opacity-70" }),
@@ -912,13 +904,10 @@ function init() {
 									intent: "gray-subtle",
 									size: "sm",
 									onClick: ctx.eventHandler("listsync:tray:copy-token", () => {
-										try {
-											if (navigator.clipboard?.writeText) {
-												navigator.clipboard.writeText(token);
-												ctx.toast.success("ListSync: token copied to clipboard");
-											}
-										} catch {
-											// clipboard unavailable; the input above is selectable
+										const tok = loginState.token.get() ?? resolveAccessToken();
+										if (tok) {
+											(ctx as any).dom.clipboard.write(tok);
+											ctx.toast.success("ListSync: token copied to clipboard");
 										}
 									}),
 								}),
