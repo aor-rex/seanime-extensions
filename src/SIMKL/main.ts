@@ -68,6 +68,7 @@ interface SimklRelation {
     year?: number
     type?: string
     poster?: string
+    ids?: SimklIds
 }
 
 interface SimklEpisode {
@@ -76,6 +77,7 @@ interface SimklEpisode {
     type?: string
     title?: string
     date?: string
+    aired?: boolean
     img?: string
     description?: string
     runtime?: number
@@ -105,6 +107,7 @@ interface SimklWatchlist {
 
 interface SimklSeasonInfo {
     counts: Record<number, number>
+    statuses: Record<number, string>
 }
 
 type SimklMediaType = "movie" | "tv" | "anime"
@@ -119,6 +122,7 @@ class Provider implements CustomSource {
     private clientId = "{{client-id}}"
     private accessToken = "{{access-token}}"
     private hideAnime = String("{{hide-anime}}") === "true"
+    private tmdbApiKey = "{{tmdb-api-key}}"
 
     getSettings(): Settings {
         return {
@@ -265,6 +269,28 @@ class Provider implements CustomSource {
         return { type, simklId }
     }
 
+    private relInfo(rel: SimklRelation): { type: SimklMediaType; simklId: number; siteUrl: string } | null {
+        if (rel?.url) {
+            const parsed = this.parseSimklUrl(rel.url)
+            if (parsed) return { type: parsed.type, simklId: parsed.simklId, siteUrl: rel.url }
+        }
+
+        const simklId = this.num(rel?.ids?.simkl ?? rel?.ids?.simkl_id)
+        if (!simklId) return null
+
+        const t = String(rel?.type ?? "").toLowerCase()
+        let type: SimklMediaType
+        if (t === "movie" || t === "movies") type = "movie"
+        else if (t === "anime" || t === "animes" || t === "ona") type = "anime"
+        else type = "tv"
+
+        const seg = type === "movie" ? "movies" : "shows"
+        const siteUrl = rel?.ids?.slug
+            ? `https://simkl.com/${seg}/${simklId}/${rel.ids.slug}`
+            : `https://simkl.com/${seg}/${simklId}`
+        return { type, simklId, siteUrl }
+    }
+
     private hashCode(str: string): number {
         let h = 0
         for (let i = 0; i < str.length; i++) {
@@ -307,19 +333,6 @@ class Provider implements CustomSource {
 
     // ---------------------------------------------------------------- season info
 
-    private seasonCountsFromEpisodes(episodes: SimklEpisode[], type: "tv" | "anime"): Record<number, number> {
-        const counts: Record<number, number> = {}
-        for (const ep of episodes) {
-            if (!ep || ep.type === "special") continue
-            const season = type === "anime"
-                ? (ep.tvdb?.season ?? ep.season ?? 1)
-                : (ep.season ?? 1)
-            if (season <= 0) continue
-            counts[season] = (counts[season] || 0) + 1
-        }
-        return counts
-    }
-
     private async seasonInfo(simklId: number, type: "tv" | "anime"): Promise<SimklSeasonInfo | null> {
         const cache = $store.get<Record<string, SimklSeasonInfo>>("simkl.seasons") ?? {}
         const key = `${type}:${simklId}`
@@ -331,10 +344,30 @@ class Provider implements CustomSource {
 
         if (!eps || !Array.isArray(eps) || eps.length === 0) return null
 
-        const counts = this.seasonCountsFromEpisodes(eps, type)
-        if (Object.keys(counts).length === 0) return null
+        const grouped: Record<number, SimklEpisode[]> = {}
+        for (const ep of eps) {
+            if (!ep || ep.type === "special") continue
+            const season = type === "anime"
+                ? (ep.tvdb?.season ?? ep.season ?? 1)
+                : (ep.season ?? 1)
+            if (season <= 0) continue
+            ;(grouped[season] ||= []).push(ep)
+        }
+        if (Object.keys(grouped).length === 0) return null
 
-        const info: SimklSeasonInfo = { counts }
+        const counts: Record<number, number> = {}
+        const statuses: Record<number, string> = {}
+        for (const [seasonStr, seasonEps] of Object.entries(grouped)) {
+            const season = Number(seasonStr)
+            counts[season] = seasonEps.length
+            let aired = 0
+            for (const e of seasonEps) if (e.aired !== false) aired++
+            if (aired === seasonEps.length) statuses[season] = "FINISHED"
+            else if (aired > 0) statuses[season] = "RELEASING"
+            else statuses[season] = "NOT_YET_RELEASED"
+        }
+
+        const info: SimklSeasonInfo = { counts, statuses }
         cache[key] = info
         $store.set("simkl.seasons", cache)
         return info
@@ -342,7 +375,7 @@ class Provider implements CustomSource {
 
     // ---------------------------------------------------------------- media conversion
 
-    private toALBaseAnime(item: SimklItem, opts: { type: SimklMediaType; season: number; episodeCount: number }): $app.AL_BaseAnime | null {
+    private toALBaseAnime(item: SimklItem, opts: { type: SimklMediaType; season: number; episodeCount: number; status?: string }): $app.AL_BaseAnime | null {
         const simklId = this.idOf(item)
         if (!simklId) return null
 
@@ -372,7 +405,7 @@ class Provider implements CustomSource {
             genres: this.strArray(item.genres),
             meanScore: this.meanScore(item),
             synonyms: this.strArray(item.all_titles),
-            status: this.airStatus(item) as $app.AL_MediaStatus,
+            status: (opts.status ?? this.airStatus(item)) as $app.AL_MediaStatus,
             episodes: isMovie ? 1 : (this.num(opts.episodeCount) ?? 1),
             type: "ANIME",
             format: this.format(type) as $app.AL_MediaFormat,
@@ -411,7 +444,12 @@ class Provider implements CustomSource {
 
         const cards: $app.AL_BaseAnime[] = []
         for (const [seasonStr, count] of Object.entries(info.counts)) {
-            const m = this.toALBaseAnime(item, { type, season: Number(seasonStr), episodeCount: count })
+            const m = this.toALBaseAnime(item, {
+                type,
+                season: Number(seasonStr),
+                episodeCount: count,
+                status: info.statuses?.[Number(seasonStr)],
+            })
             this.pushMedia(cards, new Set(), m)
         }
         return cards
@@ -539,13 +577,13 @@ class Provider implements CustomSource {
     }
 
     private relationToBase(rel: SimklRelation): $app.AL_BaseAnime | null {
-        const parsed = rel?.url ? this.parseSimklUrl(rel.url) : null
-        if (!parsed) return null
+        const info = this.relInfo(rel)
+        if (!info) return null
         const title = this.str(rel.title)
         const cover = this.posterUrl(rel.poster)
         return {
-            id: this.encodeId(parsed.type, parsed.simklId, 1),
-            siteUrl: rel.url,
+            id: this.encodeId(info.type, info.simklId, 1),
+            siteUrl: info.siteUrl,
             title: {
                 userPreferred: title,
                 romaji: title,
@@ -564,9 +602,9 @@ class Provider implements CustomSource {
             meanScore: 0,
             synonyms: [],
             status: "FINISHED",
-            episodes: parsed.type === "movie" ? 1 : undefined,
+            episodes: info.type === "movie" ? 1 : undefined,
             type: "ANIME",
-            format: this.format(parsed.type) as $app.AL_MediaFormat,
+            format: this.format(info.type) as $app.AL_MediaFormat,
             seasonYear: this.num(rel.year),
             isAdult: false,
             startDate: { year: this.num(rel.year) ?? 0 },
@@ -591,15 +629,15 @@ class Provider implements CustomSource {
         if (recs.length === 0) return undefined
         const edges: $app.AL_AnimeDetailsById_Media_Recommendations_Edges[] = []
         for (const rec of recs.slice(0, 10)) {
-            const parsed = rec?.url ? this.parseSimklUrl(rec.url) : null
-            if (!parsed) continue
-            const recId = this.encodeId(parsed.type, parsed.simklId, 1)
+            const info = this.relInfo(rec)
+            if (!info) continue
+            const recId = this.encodeId(info.type, info.simklId, 1)
             const cover = this.posterUrl(rec.poster)
             edges.push({
                 node: {
                     mediaRecommendation: {
                         id: recId,
-                        siteUrl: rec.url,
+                        siteUrl: info.siteUrl,
                         title: {
                             userPreferred: this.str(rec.title),
                             romaji: this.str(rec.title),
@@ -612,7 +650,7 @@ class Provider implements CustomSource {
                             extraLarge: cover,
                             color: "",
                         },
-                        format: this.format(parsed.type) as $app.AL_MediaFormat,
+                        format: this.format(info.type) as $app.AL_MediaFormat,
                         startDate: { year: this.num(rec.year) ?? 0 },
                         isAdult: false,
                         meanScore: 0,
@@ -663,7 +701,64 @@ class Provider implements CustomSource {
         return edges.length > 0 ? edges : undefined
     }
 
-    private async getCharacters(simklId: number, type: SimklMediaType): Promise<$app.AL_AnimeDetailsById_Media_Characters | undefined> {
+    private hasTmdbKey(): boolean {
+        const key = String(this.tmdbApiKey || "").trim()
+        return key.length > 0 && !key.includes("{{")
+    }
+
+    private tmdbImage(path: string | undefined): string {
+        const p = this.str(path)
+        if (!p) return ""
+        if (p.startsWith("http")) return p
+        return `https://image.tmdb.org/t/p/w185${p}`
+    }
+
+    private async getCharactersFromTMDB(tmdbId: number, type: SimklMediaType): Promise<$app.AL_AnimeDetailsById_Media_Characters | undefined> {
+        const cache = $store.get<Record<string, $app.AL_AnimeDetailsById_Media_Characters>>("simkl.tmdb") ?? {}
+        const key = `tmdb:${type}:${tmdbId}`
+        if (cache[key]) return cache[key]
+
+        const base = type === "movie" ? "movie" : "tv"
+        const res = await fetch(`https://api.themoviedb.org/3/${base}/${tmdbId}/credits?api_key=${encodeURIComponent(this.tmdbApiKey)}&language=en-US`)
+        if (!res.ok) return undefined
+        const data = await res.json() as any
+        const cast = Array.isArray(data?.cast) ? data.cast : []
+
+        const edges: $app.AL_AnimeDetailsById_Media_Characters_Edges[] = []
+        for (const c of cast.slice(0, 25)) {
+            const character = this.str(c?.character)
+            if (!character) continue
+            const img = this.tmdbImage(c?.profile_path)
+            const id = this.hashCode(character + String(c?.id ?? ""))
+            edges.push({
+                id,
+                name: character,
+                node: {
+                    id,
+                    isFavourite: false,
+                    name: { full: character, native: character },
+                    image: { large: img },
+                },
+                role: edges.length < 10 ? "MAIN" : "SUPPORTING",
+            })
+        }
+        if (edges.length === 0) return undefined
+
+        const chars: $app.AL_AnimeDetailsById_Media_Characters = { edges }
+        cache[key] = chars
+        $store.set("simkl.tmdb", cache)
+        return chars
+    }
+
+    private async getCharacters(item: SimklItem, type: SimklMediaType): Promise<$app.AL_AnimeDetailsById_Media_Characters | undefined> {
+        const tmdbId = this.num(item?.ids?.tmdb)
+        if (this.hasTmdbKey() && tmdbId) {
+            const tmdb = await this.getCharactersFromTMDB(tmdbId, type)
+            if (tmdb) return tmdb
+        }
+
+        const simklId = this.idOf(item)
+        if (!simklId) return undefined
         const people = await this.get<any>(`${this.detailEndpoint(type)}/${simklId}/people`, {}, false)
         const parsed = this.parsePeople(people)
         if (parsed) return { edges: parsed }
@@ -791,8 +886,9 @@ class Provider implements CustomSource {
             const item = await this.getDetail(decoded.type, decoded.simklId)
             if (item && item.ids) {
                 let epCount = this.episodeCount(item)
+                let info: SimklSeasonInfo | null = null
                 if (decoded.type !== "movie") {
-                    const info = await this.seasonInfo(decoded.simklId, decoded.type)
+                    info = await this.seasonInfo(decoded.simklId, decoded.type)
                     epCount = info?.counts?.[decoded.season] ?? epCount
                 }
 
@@ -800,6 +896,7 @@ class Provider implements CustomSource {
                     type: decoded.type,
                     season: decoded.season,
                     episodeCount: decoded.type === "movie" ? 1 : epCount,
+                    status: decoded.type === "movie" ? undefined : info?.statuses?.[decoded.season],
                 })
                 if (base) {
                     mediaCache[id] = base
@@ -850,7 +947,7 @@ class Provider implements CustomSource {
             recommendations: recommendations ?? { edges: [] },
         }
 
-        const characters = await this.getCharacters(decoded.simklId, decoded.type)
+        const characters = await this.getCharacters(item, decoded.type)
         if (characters) details.characters = characters
 
         return details
@@ -903,8 +1000,9 @@ class Provider implements CustomSource {
         if (!item || !item.ids) throw new Error("not found.")
 
         let epCount = this.episodeCount(item)
+        let info: SimklSeasonInfo | null = null
         if (decoded.type !== "movie") {
-            const info = await this.seasonInfo(decoded.simklId, decoded.type)
+            info = await this.seasonInfo(decoded.simklId, decoded.type)
             epCount = info?.counts?.[decoded.season] ?? epCount
         }
 
@@ -912,6 +1010,7 @@ class Provider implements CustomSource {
             type: decoded.type,
             season: decoded.season,
             episodeCount: decoded.type === "movie" ? 1 : epCount,
+            status: decoded.type === "movie" ? undefined : info?.statuses?.[decoded.season],
         })
         if (!base) throw new Error("not found.")
 
@@ -956,11 +1055,17 @@ class Provider implements CustomSource {
 
                     const seasons = entry?.seasons ?? []
                     if (seasons.length > 0) {
+                        const info = await this.seasonInfo(simklId, "tv")
                         for (const s of seasons) {
                             const seasonNum = Number(s?.number)
                             if (!seasonNum || seasonNum <= 0) continue
                             const count = s?.episodes?.length || this.episodeCount(item)
-                            const m = this.toALBaseAnime(item, { type: "tv", season: seasonNum, episodeCount: count })
+                            const m = this.toALBaseAnime(item, {
+                                type: "tv",
+                                season: seasonNum,
+                                episodeCount: count,
+                                status: info?.statuses?.[seasonNum],
+                            })
                             this.pushMedia(media, seen, m)
                         }
                     } else {

@@ -1,7 +1,7 @@
 {
   "id": "simklv2",
   "name": "Simkl V2",
-  "version": "2.3.3",
+  "version": "2.4.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/manifest.json",
   "language": "typescript",
   "type": "custom-source",
@@ -25,6 +25,12 @@
       {
         "name": "access-token",
         "label": "Access Token (optional, enables your watchlist)",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "tmdb-api-key",
+        "label": "TMDB API Key (optional, enables TMDB cast)",
         "type": "text",
         "default": ""
       },
