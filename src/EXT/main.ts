@@ -112,7 +112,12 @@ class Provider {
 
         if (isMovie) {
             if (this.hasEpisodeMarker(name)) return false
-            const foreign = this.significantTokens(toks).filter(
+            // Only evaluate the title stem (up to the first year/resolution/tech
+            // token) so release groups and audio/container tags like "RBG",
+            // "UHD" or "BDRemux" don't cause false drops.
+            const boundaryIdx = toks.findIndex((t) => this.isYearToken(t) || this.isTechToken(t))
+            const stem = boundaryIdx === -1 ? toks : toks.slice(0, boundaryIdx)
+            const foreign = this.significantTokens(stem).filter(
                 (t) => !aliases.has(t) && !this.isTechToken(t) && !this.isYearToken(t),
             )
             if (foreign.length > 0) return false

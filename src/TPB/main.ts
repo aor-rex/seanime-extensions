@@ -87,10 +87,6 @@ class Provider {
         return q.replace(/\s+-\s+/g, " ").replace(/\s+/g, " ").trim()
     }
 
-    private catsFor(media: Media): string {
-        return this.isMovie(media) ? this.MOVIE_CATS.join(",") : this.SERIES_CATS.join(",")
-    }
-
     private isVideoCategory(cat: string): boolean {
         return [...this.SERIES_CATS, ...this.MOVIE_CATS].includes(Number(cat))
     }
@@ -165,7 +161,12 @@ class Provider {
         if (isMovie) {
             // A movie search shouldn't return episode torrents
             if (this.hasEpisodeMarker(name)) return false
-            const foreign = this.significantTokens(toks).filter(
+            // Only evaluate the title stem (up to the first year/resolution/tech
+            // token) so release groups and audio/container tags like "RBG",
+            // "UHD" or "BDRemux" don't cause false drops.
+            const boundaryIdx = toks.findIndex((t) => this.isYearToken(t) || this.isTechToken(t))
+            const stem = boundaryIdx === -1 ? toks : toks.slice(0, boundaryIdx)
+            const foreign = this.significantTokens(stem).filter(
                 (t) => !aliases.has(t) && !this.isTechToken(t) && !this.isYearToken(t),
             )
             if (foreign.length > 0) return false
@@ -244,11 +245,11 @@ class Provider {
         return s === 0 || s === season
     }
 
-    private async searchQuery(q: string, cat?: string): Promise<TpbTorrent[]> {
+    private async searchQuery(q: string): Promise<TpbTorrent[]> {
         try {
-            let url = `${this.api}/q.php?q=${encodeURIComponent(q)}`
-            if (cat) url += `&cat=${cat}`
-            const res = await fetch(url)
+            // NB: apibay returns "No results" for any query that includes a
+            // `cat=` parameter, so categories are filtered in-app via belongsTo.
+            const res = await fetch(`${this.api}/q.php?q=${encodeURIComponent(q)}`)
             if (!res.ok) return []
             const json = await res.json<TpbTorrent[]>()
             if (!Array.isArray(json)) return []
@@ -268,8 +269,7 @@ class Provider {
         const isMovie = this.isMovie(opts.media)
         const mediaYear = opts.media.seasonYear || opts.media.startDate?.year || 0
         const season = split.season
-        let torrents = await this.searchQuery(q, this.catsFor(opts.media))
-        if (torrents.length === 0) torrents = await this.searchQuery(q)
+        const torrents = await this.searchQuery(q)
         return torrents
             .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
             .map((t) => this.toAnimeTorrent(t))
@@ -293,7 +293,9 @@ class Provider {
         let q = base
 
         if (isMovie) {
-            if (opts.media.seasonYear) q += ` ${opts.media.seasonYear}`
+            // NB: apibay returns "No results" when a year is appended to the
+            // query (e.g. "Interstellar 2014"), so don't send one here. Year
+            // matching is handled later by belongsTo.
         } else if (opts.batch) {
             q += " complete"
         } else if (opts.episodeNumber > 0) {
@@ -307,9 +309,7 @@ class Provider {
         if (q === "") return []
 
         const query = async (searchQuery: string) => {
-            let results = await this.searchQuery(searchQuery, this.catsFor(opts.media))
-            if (results.length === 0) results = await this.searchQuery(searchQuery)
-            return results
+            return this.searchQuery(searchQuery)
         }
 
         let torrents = await query(q)
