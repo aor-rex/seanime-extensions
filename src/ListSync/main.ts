@@ -229,6 +229,63 @@ function init() {
 			}, 1000);
 		}
 
+		// Scan the collection for SIMKL / TMDB custom-source entries and decode each
+		// one into (a) lookup maps of external id -> existing media ids and (b) the
+		// extension identifiers used to create new entries. Matching is scheme-agnostic:
+		// SIMKL ids come from the siteUrl and TMDB ids + seasons from the encoded local
+		// id, so both the community (raw) and V2 (encoded) schemes resolve to the
+		// actual media ids in the collection.
+		function scanCollectionForTargets(): {
+			simklAnyExt?: number;
+			simklV2Ext?: number;
+			tmdbExt?: number;
+			simklBySimklId: Record<number, number[]>;
+			tmdbByKey: Record<string, number[]>;
+		} {
+			const collection = $anilist.getAnimeCollection(true);
+			const lists = collection.MediaListCollection?.lists ?? [];
+
+			const simklBySimklId: Record<number, number[]> = {};
+			const tmdbByKey: Record<string, number[]> = {};
+			let simklAnyExt: number | undefined;
+			let simklV2Ext: number | undefined;
+			let tmdbExt: number | undefined;
+
+			for (const list of lists) {
+				for (const entry of list.entries ?? []) {
+					if (entry.id < CUSTOM_SOURCE_OFFSET) continue;
+					const extId = Math.floor((entry.id - CUSTOM_SOURCE_OFFSET) / 2 ** 40);
+					const localId = (entry.id - CUSTOM_SOURCE_OFFSET) % 2 ** 40;
+					const url = entry.media?.siteUrl ?? "";
+					const idx = url.indexOf("|END|");
+					const real = idx >= 0 ? url.slice(idx + "|END|".length) : url;
+
+					// TMDB: https://www.themoviedb.org/(movie|tv)/<id>
+					const tmdbMatch = real.match(/themoviedb\.org\/(movie|tv)\/(\d+)/);
+					if (tmdbMatch) {
+						tmdbExt = tmdbExt ?? extId;
+						const tmdbId = Number(tmdbMatch[1]);
+						let season = 1;
+						if (localId >= 2000000000) season = (localId - 2000000000) % 1000 || 1;
+						const key = `${tmdbId}:${season}`;
+						(tmdbByKey[key] ?? (tmdbByKey[key] = [])).push(entry.id);
+						continue;
+					}
+
+					// SIMKL: simkl.com/(movies|shows|movie|tv|anime)/<id>/... or bare simkl.com/<id>
+					const simklMatch = real.match(/simkl\.com\/(movies|shows|movie|tv|anime)\/(\d+)/) ?? real.match(/simkl\.com\/(\d+)/);
+					if (simklMatch) {
+						simklAnyExt = simklAnyExt ?? extId;
+						if (simklMatch[1] === "movies" || simklMatch[1] === "shows") simklV2Ext = simklV2Ext ?? extId;
+						const simklId = simklMatch[2] ? Number(simklMatch[2]) : Number(simklMatch[1]);
+						(simklBySimklId[simklId] ?? (simklBySimklId[simklId] = [])).push(entry.id);
+					}
+				}
+			}
+
+			return { simklAnyExt, simklV2Ext, tmdbExt, simklBySimklId, tmdbByKey };
+		}
+
 		// Pull the user's SIMKL watchlist and write status/score into the target
 		// custom-source lists (SIMKL / TMDB extension) via $anilist.updateEntry.
 		async function pullFromSimkl(): Promise<{ pushed: number; skipped: number }> {
@@ -244,10 +301,18 @@ function init() {
 
 			console.log("listsync: pull resolving target extensions");
 			const target = reverseSyncTarget();
-			const simklExtId = target !== "tmdb" ? findExtIdentifierForHost(SIMKL_HOST) : undefined;
-			const tmdbExtId = target !== "simkl" ? findExtIdentifierForHost(TMDB_HOST) : undefined;
+			const targetSimkl = target !== "tmdb";
+			const targetTmdb = target !== "simkl";
+			const syncAnime = $getUserPreference("sync-anime") === "true";
 
-			if (!simklExtId && !tmdbExtId) {
+			// Scan the collection once and decode every custom-source entry into
+			// per-external-id media id maps (for existing-entry updates) plus the
+			// extension identifiers used to CREATE new entries.
+			const lookup = scanCollectionForTargets();
+			const simklAnyExt = targetSimkl ? lookup.simklAnyExt : undefined;
+			const tmdbExt = targetTmdb ? lookup.tmdbExt : undefined;
+
+			if (!simklAnyExt && !tmdbExt) {
 				pushActivity("pull", "No SIMKL/TMDB entries in your collection yet — add one first", "error");
 				ctx.toast.error("ListSync: add a SIMKL/TMDB entry to your collection before pulling");
 				return { pushed: 0, skipped: 0 };
@@ -257,7 +322,7 @@ function init() {
 			// watchlists (every episode for every show). We only need season-level
 			// watch state, which all-items returns by default, so we omit it. A
 			// generous timeout also guarantees the fetch can never hang forever.
-			console.log(`listsync: pull fetching watchlist (simklExtId=${simklExtId} tmdbExtId=${tmdbExtId})`);
+			console.log(`listsync: pull fetching watchlist (simklExtId=${lookup.simklV2Ext} tmdbExtId=${tmdbExt})`);
 			const res = await fetch(`${SIMKL_API_BASE}/sync/all-items/?extended=full`, {
 				timeout: 90,
 				headers: {
@@ -280,14 +345,9 @@ function init() {
 			let pushed = 0;
 			let skipped = 0;
 
-			const plan = (extId: number | undefined, type: "movie" | "tv" | "anime", externalId: number, status: $app.AL_MediaListStatus, scoreRaw: number | undefined, seasons: number[]): void => {
-				if (!extId) return;
-				for (const season of seasons) {
-					const localId = encodeLocalId(type, externalId, season);
-					planned.push({ mediaId: buildMediaId(extId, localId), status, scoreRaw });
-				}
-			};
-
+			// For each watchlist item: update existing collection entries when found
+			// (matched scheme-agnostically by external id), otherwise create new ones
+			// in the target extension(s) using their own id schemes.
 			const apply = (item: ReverseItem, kind: "movie" | "show" | "anime", simklId: number, tmdbId: number | undefined, seasons: number[]): void => {
 				const status = REVERSE_SIMKL_STATUS_MAP[item.status ?? ""];
 				if (!status) {
@@ -295,14 +355,40 @@ function init() {
 					return;
 				}
 				const scoreRaw = typeof item.user_rating === "number" && item.user_rating > 0 ? Math.round(item.user_rating * 10) : undefined;
+				const type = kind === "movie" ? "movie" : kind === "anime" ? "anime" : "tv";
+				let plannedAny = false;
 
-				if (simklExtId) {
-					plan(simklExtId, kind === "movie" ? "movie" : kind === "anime" ? "anime" : "tv", simklId, status, scoreRaw, seasons);
+				if (targetSimkl) {
+					const ids = lookup.simklBySimklId[simklId] ?? [];
+					if (ids.length > 0) {
+						for (const mediaId of ids) planned.push({ mediaId, status, scoreRaw });
+						plannedAny = true;
+					} else if (lookup.simklV2Ext) {
+						for (const season of seasons) {
+							planned.push({ mediaId: buildMediaId(lookup.simklV2Ext, encodeLocalId(type, simklId, season)), status, scoreRaw });
+						}
+						plannedAny = true;
+					}
 				}
-				if (tmdbExtId && tmdbId) {
-					plan(tmdbExtId, kind === "movie" ? "movie" : "tv", tmdbId, status, scoreRaw, seasons);
+
+				if (targetTmdb && tmdbId) {
+					for (const season of seasons) {
+						const ids = lookup.tmdbByKey[`${tmdbId}:${season}`] ?? [];
+						if (ids.length > 0) {
+							for (const mediaId of ids) planned.push({ mediaId, status, scoreRaw });
+							plannedAny = true;
+						} else if (tmdbExt) {
+							planned.push({ mediaId: buildMediaId(tmdbExt, encodeLocalId(type === "anime" ? "tv" : type, tmdbId, season)), status, scoreRaw });
+							plannedAny = true;
+						}
+					}
 				}
-				pushed++;
+
+				if (plannedAny) {
+					pushed++;
+				} else {
+					skipped++;
+				}
 			};
 
 			for (const item of data.movies ?? []) {
@@ -322,6 +408,12 @@ function init() {
 				apply(item, "show", id, item.show?.ids?.tmdb, seasonsOfItem(item));
 			}
 			for (const item of data.anime ?? []) {
+				// Skip anime when sync-anime is off so SIMKL anime never duplicate
+				// native AniList entries.
+				if (!syncAnime) {
+					skipped++;
+					continue;
+				}
 				const id = item.anime?.ids?.simkl;
 				if (!id) {
 					skipped++;
@@ -385,12 +477,12 @@ function init() {
 			m = real.match(/themoviedb\.org\/tv\/(\d+)/);
 			if (m) return { category: "shows", ids: { tmdb: Number(m[1]) } };
 
-			// SIMKL movie: https://simkl.com/movies/<id>/<slug>
-			m = real.match(/simkl\.com\/movies\/(\d+)/);
+			// SIMKL movie: https://simkl.com/movies/<id>/<slug> or simkl.com/movie/<id>
+			m = real.match(/simkl\.com\/movies\/(\d+)/) ?? real.match(/simkl\.com\/movie\/(\d+)/);
 			if (m) return { category: "movies", ids: { simkl: Number(m[1]) } };
 
-			// SIMKL show: https://simkl.com/shows/<id>/<slug>
-			m = real.match(/simkl\.com\/shows\/(\d+)/);
+			// SIMKL show: https://simkl.com/shows/<id>/<slug> or simkl.com/(tv|anime)/<id>
+			m = real.match(/simkl\.com\/shows\/(\d+)/) ?? real.match(/simkl\.com\/(?:tv|anime)\/(\d+)/);
 			if (m) return { category: "shows", ids: { simkl: Number(m[1]) } };
 
 			// SIMKL bare: https://simkl.com/<id> (no slug, type unknown) -> use format

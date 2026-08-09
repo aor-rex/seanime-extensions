@@ -1,7 +1,7 @@
 {
-  "id": "torrentio",
+  "id": "torrentiov2",
   "name": "Torrentio V2",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",

@@ -6,10 +6,26 @@ Personal fork of [`dot-fx/seanime-extensions`](https://github.com/dot-fx/seanime
 
 ## Changes in this fork
 
-### SIMKL custom source (`src/SIMKL`)
+### SIMKL custom source (`src/SIMKL`) — **Simkl V2** (`id: simklv2`)
 - Movie support in addition to TV shows.
 - **Watchlist** support via a SIMKL OAuth access token (PIN flow).
-- Per-season TV/anime sources; bumped to `2.1.0`, points at the fork's raw URLs.
+- Per-season TV/anime sources; bumped to `2.1.1`, points at the fork's raw URLs.
+- Renamed to `simklv2` so it can be installed alongside (or replace) the community SIMKL extension.
+
+### ListSync (`src/ListSync`)
+Two-way sync between your SIMKL watchlist and your SIMKL V2 / TMDB V2 custom-source entries:
+
+- **Push** — status/score changes on custom-source entries are posted to your simkl.com watchlist, plus a manual "Sync library now" backfill and delete handling.
+- **Pull** — your simkl.com watchlist is written back into your library (per **reverse-sync-target**: SIMKL, TMDB V2, or both), creating new entries when they aren't in the collection yet.
+- **`sync-anime`** (off by default) skips SIMKL anime so they never duplicate your native AniList anime.
+
+**ListSync works with SIMKL V2 and TMDB V2**, not the community jabifx SIMKL:
+
+- SIMKL V2 / TMDB V2 use *encoded* media ids (`movie 1e9+id`, `tv/anime 2e9|3e9 + id*1000 + season`), exactly the scheme ListSync plans with.
+- Their siteUrls are the parseable forms (`simkl.com/movies|shows/…`, `themoviedb.org/movie|tv/…`).
+- The community SIMKL uses **raw** simkl ids and `simkl.com/movie|tv|anime/…` siteUrls, which ListSync cannot match — install **Simkl V2** instead.
+
+Manifest URL: `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json`
 
 ### Torrent providers (`src/*`)
 | Provider | Type | Notes |
@@ -29,6 +45,16 @@ The bundled `anime-torrent-provider.d.ts` / `core.d.ts` were added (they're miss
 
 1. Install the extensions in Seanime:
    - **Extensions → Add extensions → paste the manifest URL** for each provider you want, or drop the `src/<provider>/manifest.json` into Seanime's `extensions` data directory.
+
+   Manifest URLs (the fork's raw GitHub links):
+
+   | Extension | Type | Manifest URL |
+   |---|---|---|
+   | **Simkl V2** | custom source | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/manifest.json` |
+   | **TMDB V2** | custom source | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TMDB/manifest.json` |
+   | **ListSync** | plugin | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json` |
+   | EXT / 1337x / YTS / EZTV / TPB / Torrentio | torrent providers | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/<name>/manifest.json` |
+
 2. SIMKL needs a **Client ID** (from https://simkl.com/settings/developer/) and, for the watchlist, an **Access Token** — generate one with the OAuth helper at `auth/callback.html` (see below).
 
 ## SIMKL OAuth (access token)
