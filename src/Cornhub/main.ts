@@ -80,9 +80,32 @@ class Provider {
         const candidates = [query, this._sanitizeQuery(query)]
 
         const ret: CornSearchResult[] = []
+        const seen = new Set<string>()
+        const push = (videos: CornhubVideo[]) => {
+            for (const video of this._dedupeVideos(videos)) {
+                if (!video.videoId || !video.title) continue
+                if (seen.has(video.videoId)) continue
+                seen.add(video.videoId)
+                ret.push({
+                    id: video.videoId,
+                    title: video.title,
+                    url: video.url,
+                    subOrDub: "both",
+                })
+            }
+        }
+
+        // Exact-match probe: pornhub's search results carry the full title, so a
+        // result whose normalized title equals the normalized query is the video
+        // we're looking for. Use it to stop early without polling more candidates.
+        const queryNorm = this._normalizeTitle(query)
 
         // Mirrors the community custom source: try multiple URL variants and
         // swallow per-request failures so a 404 never rejects the whole search.
+        // Results are accumulated across candidates instead of returning on the
+        // first hit: pornhub answers long/symbol-heavy queries with HTTP 404 and
+        // a "related videos" body (no exact match), so we keep going until a
+        // candidate surfaces the exact title.
         for (const candidate of candidates) {
             if (!candidate) continue
 
@@ -93,22 +116,18 @@ class Provider {
 
             for (const url of urls) {
                 try {
-                    const html = await this._fetchText(url)
+                    // allow404: pornhub returns 404 (with a valid results body) for
+                    // long/symbol-heavy queries, e.g. a full video title picked from
+                    // the PornHub custom source.
+                    const html = await this._fetchText(url, true)
                     if (!html || html.length < 500) continue
 
                     const videos = this._parseSearchPage(html)
+                    push(videos)
 
-                    for (const video of this._dedupeVideos(videos)) {
-                        if (!video.videoId || !video.title) continue
-                        ret.push({
-                            id: video.videoId,
-                            title: video.title,
-                            url: video.url,
-                            subOrDub: "both",
-                        })
+                    if (videos.some((v) => this._normalizeTitle(v.title) === queryNorm)) {
+                        return ret
                     }
-
-                    if (ret.length > 0) return ret
                 } catch (err) {
                     // Try the next URL / candidate (pornhub 404s on queries it
                     // can't resolve, e.g. ones containing "!!").
@@ -121,11 +140,23 @@ class Provider {
 
     // Strips characters pornhub's search endpoint rejects, keeping only safe
     // ones. "Hardcore Gangbang!! 4 Spaniard" -> "Hardcore Gangbang 4 Spaniard".
+    // Hyphens are removed too: pornhub treats "-" as an exclusion operator, so
+    // "STEP-MOTHER" never matches "stepmother". Pornhub is fine with bare
+    // alphanumeric words separated by spaces.
     private _sanitizeQuery(query: string): string {
         return String(query || "")
-            .replace(/[^a-zA-Z0-9\s\-_+]/g, " ")
+            .replace(/[^a-zA-Z0-9\s]/g, " ")
             .replace(/\s+/g, " ")
             .trim()
+    }
+
+    // Lowercases and collapses to alphanumeric runes only, so two spellings of
+    // the same title ("STEP-MOTHER" vs "STEP MOTHER" vs "STEPMOTHER") compare
+    // equal.
+    private _normalizeTitle(title: string): string {
+        return String(title || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "")
     }
 
     async findEpisodes(id: string): Promise<CornEpisodeDetails[]> {
@@ -419,7 +450,7 @@ class Provider {
 
     // ------------------------------------------------------------------ utils
 
-    private async _fetchText(url: string): Promise<string> {
+    private async _fetchText(url: string, allow404: boolean = false): Promise<string> {
         const headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
@@ -429,7 +460,13 @@ class Provider {
         let res = await fetch(url, { headers: headers })
 
         if (!res.ok) {
-            throw new Error(`HTTP ${res.status} for ${url}`)
+            // PornHub answers many long/symbol-heavy search queries with HTTP 404
+            // while still serving a fully parseable results page. Allow the
+            // caller to consume those bodies (used by search()) while watch-page
+            // fetches keep failing cleanly on a real 404.
+            if (!(allow404 && res.status === 404)) {
+                throw new Error(`HTTP ${res.status} for ${url}`)
+            }
         }
 
         let html = await res.text()
@@ -439,7 +476,9 @@ class Provider {
         if (html.length < 500 || html.includes("leastFactor")) {
             res = await fetch(url, { headers: headers })
             if (!res.ok) {
-                throw new Error(`HTTP ${res.status} for ${url}`)
+                if (!(allow404 && res.status === 404)) {
+                    throw new Error(`HTTP ${res.status} for ${url}`)
+                }
             }
             html = await res.text()
         }
