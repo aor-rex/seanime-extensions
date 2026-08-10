@@ -1,0 +1,13 @@
+{
+  "id": "streamed",
+  "name": "Streamed (Sports)",
+  "version": "1.0.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamedProvider/manifest.json",
+  "language": "typescript",
+  "type": "onlinestream-provider",
+  "description": "Online streaming provider for Streamed (sports). Resolves live sports streams from Streamed's embed player.",
+  "author": "aor-rex",
+  "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamedProvider/icon.png",
+  "lang": "multi",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamedProvider/main.ts"
+}

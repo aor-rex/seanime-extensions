@@ -1,0 +1,13 @@
+{
+  "id": "streamed",
+  "name": "Streamed (Sports)",
+  "version": "1.0.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Streamed/manifest.json",
+  "language": "typescript",
+  "type": "custom-source",
+  "description": "Browse live and upcoming sports matches (football, basketball, UFC, tennis and more) as a Custom Source.",
+  "author": "aor-rex",
+  "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Streamed/icon.png",
+  "lang": "multi",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Streamed/main.ts"
+}
