@@ -57,6 +57,13 @@ class Provider {
         return m ? m[1] : ""
     }
 
+    private formatBytes(size: number): string {
+        if (!size) return ""
+        const i = Math.floor(Math.log(size) / Math.log(1024))
+        const units = ["B", "KB", "MB", "GB", "TB"]
+        return (size / Math.pow(1024, i)).toFixed(2) + " " + (units[i] || "B")
+    }
+
     private isMovie(media: Media): boolean {
         return media.format === "MOVIE" || media.episodeCount === 1
     }
@@ -147,6 +154,14 @@ class Provider {
             const base = this.splitSeason(title).base
             const norm = $scannerUtils.normalizeTitle(base)
             for (const t of norm?.tokens ?? []) set.add(t)
+            // Release names often drop the apostrophe/possessive ("Man's" ->
+            // "Mans"), so also add tokens from the sanitized form to keep those
+            // results passing belongsTo.
+            const san = this.sanitize(base)
+            if (san !== base) {
+                const sanNorm = $scannerUtils.normalizeTitle(san)
+                for (const t of sanNorm?.tokens ?? []) set.add(t)
+            }
         }
         return set
     }
@@ -209,7 +224,7 @@ class Provider {
             name: t.name,
             date: new Date(Number(t.added) * 1000).toISOString(),
             size: Number(t.size),
-            formattedSize: "",
+            formattedSize: Number(t.size) > 0 ? this.formatBytes(Number(t.size)) : "",
             seeders: Number(t.seeders),
             leechers: Number(t.leechers),
             downloadCount: 0,

@@ -95,6 +95,14 @@ class Provider {
             const base = this.splitSeason(title).base
             const norm = $scannerUtils.normalizeTitle(base)
             for (const t of norm?.tokens ?? []) set.add(t)
+            // Release names often drop the apostrophe/possessive ("Man's" ->
+            // "Mans"), so also add tokens from a de-punctuated form to keep
+            // those results passing belongsTo.
+            const dequoted = base.replace(/[''":]/g, "")
+            if (dequoted !== base) {
+                const altNorm = $scannerUtils.normalizeTitle(dequoted)
+                for (const t of altNorm?.tokens ?? []) set.add(t)
+            }
         }
         return set
     }
