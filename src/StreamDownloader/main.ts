@@ -132,6 +132,8 @@ function init() {
 		const episodes = ctx.state<EpisodeItem[]>([]);
 		const episodeSelected = ctx.state<EpisodeItem | null>(null);
 		const sources = ctx.state<VideoSource[]>([]);
+		const selectedServer = ctx.state<string>("");
+		const selectedQuality = ctx.state<string>("");
 		const dubbed = ctx.state<boolean>(false);
 
 		const downloads = ctx.state<DownloadsEntry[]>([]);
@@ -378,6 +380,10 @@ function init() {
 				sources.set(data?.videoSources ?? []);
 				if (sources.get().length === 0) {
 					status.set("No video sources returned for this episode.");
+				} else {
+					const servers = groupServers();
+					selectedServer.set(servers[0]);
+					selectedQuality.set(groupQualities(servers[0])[0] ?? "");
 				}
 				view.set("sources");
 			} catch (err) {
@@ -396,6 +402,25 @@ function init() {
 			const q = src.quality || "auto";
 			const t = src.type === "m3u8" ? "HLS" : "MP4";
 			return `${q} · ${t}${src.label ? " · " + src.label : ""}`;
+		}
+
+		// Unique server names, in order of first appearance.
+		function groupServers(): string[] {
+			const seen: Record<string, boolean> = {};
+			return sources.get().filter((s) => (seen[s.server] ? false : (seen[s.server] = true))).map((s) => s.server);
+		}
+
+		// Unique quality labels for a given server, in order of first appearance.
+		function groupQualities(server: string): string[] {
+			const seen: Record<string, boolean> = {};
+			return sources.get().filter((s) => s.server === server && (seen[s.quality] ? false : (seen[s.quality] = true))).map((s) => s.quality);
+		}
+
+		// The source matching the current server + quality selection.
+		function selectedSource(): VideoSource | undefined {
+			const srv = selectedServer.get();
+			const q = selectedQuality.get();
+			return sources.get().find((s) => s.server === srv && s.quality === q);
 		}
 
 		function formatSpeed(n: number): string {
@@ -519,19 +544,56 @@ function init() {
 				return items;
 			}
 
-			items.push(tray.text("Choose a source to download:", { className: "text-xs opacity-70" }));
+			const servers = groupServers();
+			if (servers.length === 0) {
+				items.push(tray.text("No servers available.", { className: "text-xs opacity-60" }));
+				return items;
+			}
 
-			for (let i = 0; i < srcs.length; i++) {
-				const src = srcs[i];
+			const srv = selectedServer.get();
+			const qualities = groupQualities(srv);
+			const src = selectedSource();
+
+			items.push(
+				tray.flex(
+					[
+						tray.select("Server", {
+							options: servers.map((v) => ({ label: v, value: v })),
+							value: srv,
+							size: "sm",
+							onChange: ctx.eventHandler("streamdownloader:server", (e) => {
+								selectedServer.set(e?.value ?? srv);
+								const qs = groupQualities(selectedServer.get());
+								selectedQuality.set(qs[0] ?? "");
+								tray.update();
+							}),
+						}),
+						tray.select("Quality", {
+							options: qualities.map((v) => ({ label: v, value: v })),
+							value: selectedQuality.get(),
+							size: "sm",
+							onChange: ctx.eventHandler("streamdownloader:quality", (e) => {
+								selectedQuality.set(e?.value ?? selectedQuality.get());
+								tray.update();
+							}),
+						}),
+					],
+					{ gap: 8, direction: "column" }
+				)
+			);
+
+			if (src) {
 				items.push(
-					tray.button(sourceLabel(src), {
+					tray.button(`Download ${src.quality || "source"}`, {
 						size: "sm",
 						intent: src.type === "m3u8" ? "warning-subtle" : "primary-subtle",
-						onClick: ctx.eventHandler(`streamdownloader:source:${i}`, () => {
+						onClick: ctx.eventHandler("streamdownloader:download", () => {
 							startDownload(src, `${mediaTitle.get()} E${episodeSelected.get()?.number ?? ""} [${sourceLabel(src)}]`);
 						}),
 					})
 				);
+			} else {
+				items.push(tray.text("No matching source for this server/quality.", { className: "text-xs opacity-60" }));
 			}
 
 			items.push(

@@ -38,6 +38,7 @@
         "networkAccess": {
           "allowedDomains": ["127.0.0.1", "localhost"]
         },
+        "readPaths": ["$DOWNLOAD/**", "$SEANIME_ANIME_LIBRARY/**"],
         "writePaths": ["$DOWNLOAD/**", "$SEANIME_ANIME_LIBRARY/**"],
         "commandScopes": [
           {
