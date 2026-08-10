@@ -1,7 +1,7 @@
 {
   "id": "cornhub",
   "name": "CornHub (18+)",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Cornhub/manifest.json",
   "language": "typescript",
   "type": "onlinestream-provider",
