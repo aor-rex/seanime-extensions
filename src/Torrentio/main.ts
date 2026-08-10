@@ -78,6 +78,10 @@ function errMsg(e: any): string {
     return e instanceof Error ? e.message : String(e)
 }
 
+function delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 function parseResolution(name: string): string {
     const m = name.match(/(2160p|1080p|720p|480p|360p|4k)/i)
     return m ? m[1].toLowerCase() : ""
@@ -269,32 +273,44 @@ class Provider {
         if (this.cache[media.id]) return this.cache[media.id]
         let resolved: ResolvedIds = {}
 
-        try {
-            const res = await fetch(ARM_API + "?source=anilist&id=" + media.id, { timeout: 15 })
-            if (res.ok) {
-                const d = res.json<any>()
-                if (d) {
-                    resolved = {
-                        kitsuId: d.kitsu || undefined,
-                        imdbId: d.imdb || undefined,
-                        malId: d.myanimelist || undefined,
+        // ARM and YUNA are independent and both keyed on the AniList id, so
+        // query them in parallel. Prefer ARM (it also returns imdb/mal).
+        const armPromise = (async () => {
+            try {
+                const res = await fetch(ARM_API + "?source=anilist&id=" + media.id, { timeout: 15 })
+                if (res.ok) {
+                    const d = res.json<any>()
+                    if (d) {
+                        return {
+                            kitsuId: d.kitsu || undefined,
+                            imdbId: d.imdb || undefined,
+                            malId: d.myanimelist || undefined,
+                        }
                     }
                 }
+            } catch (e) {
+                console.error("Torrentio: ARM lookup failed: " + errMsg(e))
             }
-        } catch (e) {
-            console.error("Torrentio: ARM lookup failed: " + errMsg(e))
-        }
+            return null
+        })()
 
-        if (!resolved.kitsuId) {
+        const yunaPromise = (async () => {
             try {
                 const res = await fetch(YUNA_API + "?source=anilist&id=" + media.id, { timeout: 15 })
                 if (res.ok) {
                     const d = res.json<any>()
-                    if (d && d.kitsu) resolved.kitsuId = d.kitsu
+                    if (d && d.kitsu) return { kitsuId: d.kitsu as number }
                 }
             } catch (e) {
                 console.error("Torrentio: yuna lookup failed: " + errMsg(e))
             }
+            return null
+        })()
+
+        const [armResolved, yunaResolved] = await Promise.all([armPromise, yunaPromise])
+        if (armResolved) resolved = armResolved
+        if (!resolved.kitsuId && yunaResolved && yunaResolved.kitsuId) {
+            resolved.kitsuId = yunaResolved.kitsuId
         }
 
         // Fallback for TMDB custom-source media: ARM/YUNA can't resolve the
@@ -504,7 +520,13 @@ class Provider {
 
     private async fetchStreams(url: string): Promise<TorrentioStream[]> {
         console.log("Torrentio: fetching " + url)
-        const res = await fetch(url, { timeout: 30 })
+        let res = await fetch(url, { timeout: 30 })
+        if (!res.ok && res.status >= 500) {
+            // One-shot retry so a transient 502/504 doesn't zero out a response
+            // and mislead the batch-size early-exit heuristic.
+            await delay(500)
+            res = await fetch(url, { timeout: 30 })
+        }
         if (!res.ok) return []
         const data = res.json<{ streams?: TorrentioStream[] }>()
         return (data && data.streams) ? data.streams : []
@@ -534,10 +556,20 @@ class Provider {
         return []
     }
 
-    // Reconstruct total torrent sizes for batch torrents. Torrentio's per-episode
-    // endpoint returns the same pack infoHash with a different fileIdx each time,
-    // so we scan episodes and sum the distinct file sizes.
-    private async estimateBatchSizes(torrents: AnimeTorrent[], ids: ResolvedIds, media: Media): Promise<void> {
+    // Reconstruct total torrent sizes for batch torrents. Two strategies:
+    //   1. Fast path: Torrentio's movie endpoint lists every file of a pack in a
+    //      single response, so true totals need only one request per hash.
+    //   2. Fallback: for hashes the movie endpoint didn't cover, scan the series
+    //      episode endpoints in parallel (bounded concurrency) and sum the
+    //      distinct file sizes, matching the old per-episode behavior.
+    // Sizes from the fast path are exact; fallback sizes are the searched
+    // season's total (extrapolated by the season range when known).
+    private async estimateBatchSizes(
+        torrents: AnimeTorrent[],
+        ids: ResolvedIds,
+        media: Media,
+        alreadyFetched?: TorrentioStream[],
+    ): Promise<void> {
         const batch = torrents.filter(t => t.isBatch && t.infoHash)
         if (batch.length === 0) return
 
@@ -551,53 +583,118 @@ class Provider {
             if (!nfo[t.infoHash!]) nfo[t.infoHash!] = t
         }
         const hashes = Object.keys(nfo)
-        const uncached: string[] = hashes.filter(h => !(this.batchSizeCache[cfg + "|" + h]))
+        const uncached: string[] = hashes.filter(
+            h => !(this.batchSizeCache[cfg + "|" + h]) && !(this.batchSizeCache[cfg + "|" + h + "#true"])
+        )
 
         if (uncached.length > 0) {
             const perHashFiles: { [k: string]: { [fileIdx: number]: number } } = {}
             const wanted = new Set(uncached)
-            const cap = Math.min(media.episodeCount && media.episodeCount > 0 ? media.episodeCount : 100, 100)
-            let emptyRuns = 0
-            let matched = false
-            for (let ep = 1; ep <= cap; ep++) {
-                const url = useKitsu
-                    ? this.seriesUrl(ids.kitsuId!, ep)
-                    : this.imdbSeriesUrl(ids.imdbId!, season, ep)
-                const streams = await this.fetchStreams(url)
-                let foundAny = false
-                for (const s of streams) {
+
+            // Seed with file entries already returned by the caller's query so
+            // the searched episode is never double-fetched.
+            if (alreadyFetched) {
+                for (const s of alreadyFetched) {
                     if (!wanted.has(s.infoHash)) continue
-                    foundAny = true
                     const size = parseStreamMeta(s.title || "").sizeBytes
                     if (!size) continue
                     const idx = typeof s.fileIdx === "number" ? s.fileIdx : 0
                     if (!perHashFiles[s.infoHash]) perHashFiles[s.infoHash] = {}
                     perHashFiles[s.infoHash][idx] = size
                 }
-                // Stop after 2 consecutive episodes that produced no streams we care
-                // about, but only once we've matched at least one (kitsu packs may
-                // start at high absolute episode numbers).
-                if (foundAny) {
-                    matched = true
-                    emptyRuns = 0
-                } else if (matched) {
-                    emptyRuns++
-                    if (emptyRuns >= 2) break
+            }
+
+            // Fast path: one movie-endpoint request lists every file of a pack.
+            const trueTotals = new Set<string>()
+            const movieFiles: { [k: string]: { [fileIdx: number]: number } } = {}
+            const movieUrl = useKitsu ? this.movieUrl(ids.kitsuId!) : this.imdbMovieUrl(ids.imdbId!)
+            const movieStreams = await this.fetchStreams(movieUrl)
+            for (const s of movieStreams) {
+                if (!wanted.has(s.infoHash)) continue
+                const size = parseStreamMeta(s.title || "").sizeBytes
+                if (!size) continue
+                const idx = typeof s.fileIdx === "number" ? s.fileIdx : 0
+                if (!movieFiles[s.infoHash]) movieFiles[s.infoHash] = {}
+                movieFiles[s.infoHash][idx] = size
+                if (!perHashFiles[s.infoHash]) perHashFiles[s.infoHash] = {}
+                perHashFiles[s.infoHash][idx] = size
+            }
+            // Trust the fast path only when the movie endpoint itself returned
+            // multiple files for a hash (a batch is multi-file by definition);
+            // single-file hits are likely a partial response, so let the episode
+            // scan refine them.
+            for (const h of uncached) {
+                const set = movieFiles[h]
+                if (set && Object.keys(set).length >= 2) trueTotals.add(h)
+            }
+
+            // Fallback: parallel episode scan for hashes the fast path missed.
+            const missing = uncached.filter(h => !trueTotals.has(h))
+            if (missing.length > 0) {
+                const scanWanted = new Set(missing)
+                const cap = Math.min(media.episodeCount && media.episodeCount > 0 ? media.episodeCount : 100, 100)
+                const CONCURRENCY = 6
+                let emptyRuns = 0
+                let matched = false
+                for (let start = 1; start <= cap; start += CONCURRENCY) {
+                    const end = Math.min(start + CONCURRENCY - 1, cap)
+                    const eps: number[] = []
+                    for (let ep = start; ep <= end; ep++) eps.push(ep)
+                    const results = await Promise.all(eps.map(ep => {
+                        const url = useKitsu
+                            ? this.seriesUrl(ids.kitsuId!, ep)
+                            : this.imdbSeriesUrl(ids.imdbId!, season, ep)
+                        return this.fetchStreams(url)
+                    }))
+                    for (let i = 0; i < eps.length; i++) {
+                        const streams = results[i]
+                        let foundAny = false
+                        for (const s of streams) {
+                            if (!scanWanted.has(s.infoHash)) continue
+                            foundAny = true
+                            const size = parseStreamMeta(s.title || "").sizeBytes
+                            if (!size) continue
+                            const idx = typeof s.fileIdx === "number" ? s.fileIdx : 0
+                            if (!perHashFiles[s.infoHash]) perHashFiles[s.infoHash] = {}
+                            perHashFiles[s.infoHash][idx] = size
+                        }
+                        // Stop after 2 consecutive episodes that produced no streams
+                        // we care about, but only once we've matched at least one
+                        // (kitsu packs may start at high absolute episode numbers).
+                        if (foundAny) {
+                            matched = true
+                            emptyRuns = 0
+                        } else if (matched) {
+                            emptyRuns++
+                            if (emptyRuns >= 2) break
+                        }
+                    }
+                    if (emptyRuns >= 2 && matched) break
                 }
             }
-            // Cache totals for the searched season's files
+
+            // Cache: fast-path sums are true totals; scan sums are season totals.
             for (const h of uncached) {
                 const set = perHashFiles[h]
                 if (!set) continue
                 let total = 0
                 for (const k in set) total += set[k]
-                if (total > 0) this.batchSizeCache[cfg + "|" + h] = total
+                if (total > 0) {
+                    const key = trueTotals.has(h) ? cfg + "|" + h + "#true" : cfg + "|" + h
+                    this.batchSizeCache[key] = total
+                }
             }
         }
 
         // Apply estimates
         for (const h of hashes) {
             const t = nfo[h]
+            const trueTotal = this.batchSizeCache[cfg + "|" + h + "#true"]
+            if (trueTotal) {
+                t.size = trueTotal
+                t.formattedSize = formatSizeBytes(trueTotal)
+                continue
+            }
             const searchedSeasonTotal = this.batchSizeCache[cfg + "|" + h]
             if (!searchedSeasonTotal) continue
             const range = parseSeasonRange(t.name)
@@ -620,7 +717,7 @@ class Provider {
             const streams = await this.fetchForMedia(ids, media, 1)
             const torrents = dedupeByHash(streams.map(s => this.streamToTorrent(s, !!(ids.kitsuId || ids.imdbId))))
             if (!this.isMovieOrSingle(media)) {
-                await this.estimateBatchSizes(torrents, ids, media)
+                await this.estimateBatchSizes(torrents, ids, media, streams)
             }
             return torrents
         } catch (e) {
@@ -662,7 +759,7 @@ class Provider {
             }
 
             if (!movieOrSingle) {
-                await this.estimateBatchSizes(torrents, ids, media)
+                await this.estimateBatchSizes(torrents, ids, media, streams)
             }
 
             return dedupeByHash(torrents)
