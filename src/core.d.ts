@@ -766,3 +766,167 @@ declare namespace $store {
      */
     function watch<T = any>(key: string, callback: (value: T) => void): void
 }
+
+/**
+ * Go OS module (subset). Requires the `system` scope.
+ * Path-hitting methods throw if the path is not inside the plugin's read/write allowlist.
+ */
+declare namespace $os {
+    /** Operating system name, e.g. "linux", "windows", "darwin" */
+    const platform: string
+    /** CPU architecture, e.g. "amd64", "arm64" */
+    const arch: string
+    /** os.Interrupt signal value */
+    const Interrupt: number
+    /** os.Kill signal value */
+    const Kill: number
+
+    const O_RDONLY: number
+    const O_WRONLY: number
+    const O_RDWR: number
+    const O_APPEND: number
+    const O_CREATE: number
+    const O_EXCL: number
+    const O_SYNC: number
+    const O_TRUNC: number
+
+    const FileMode: {
+        ModeDir: number
+        ModeAppend: number
+        ModeExclusive: number
+        ModeTemporary: number
+        ModeSymlink: number
+        ModeDevice: number
+        ModeNamedPipe: number
+        ModeSocket: number
+        ModeSetuid: number
+        ModeSetgid: number
+        ModeCharDevice: number
+        ModeSticky: number
+        ModeIrregular: number
+        ModeType: number
+        ModePerm: number
+    }
+
+    function readFile(path: string): Uint8Array
+    function writeFile(path: string, data: Uint8Array | string, perm: number): void
+    function readDir(path: string): string[]
+    function tempDir(): string
+    function configDir(): string
+    function homeDir(): string
+    function cacheDir(): string
+    function truncate(path: string, size: number): void
+    function mkdir(path: string, perm: number): void
+    function mkdirAll(path: string, perm: number): void
+    function rename(oldpath: string, newpath: string): void
+    function remove(path: string): void
+    function removeAll(path: string): void
+    function stat(path: string): any
+    function openFile(path: string, flag: number, perm: number): any
+    function create(path: string): any
+    /** Creates an exec.Cmd. Requires the command to be within the plugin's commandScopes. */
+    function cmd(name: string, arg?: string[]): any
+}
+
+/**
+ * Go IO module (subset). Requires the `system` scope.
+ */
+declare namespace $io {
+    function copy(dst: any, src: any): number
+    function readAll(r: any): Uint8Array
+    function writeString(w: any, s: string): number
+    function readAtLeast(r: any, buf: Uint8Array, min: number): number
+    function readFull(r: any, buf: Uint8Array): number
+    function copyN(dst: any, src: any, n: number): number
+    function copyBuffer(dst: any, src: any, buf: Uint8Array): number
+    function limitReader(r: any, n: number): any
+    function newSectionReader(r: any, off: number, n: number): any
+    function nopCloser(r: any): any
+}
+
+/**
+ * Go bufio module (subset). Requires the `system` scope.
+ */
+declare namespace $bufio {
+    function newReader(r: any): any
+    function newReaderSize(r: any, size: number): any
+    function newWriter(w: any): any
+    function newWriterSize(w: any, size: number): any
+    function newScanner(r: any): any
+    function scanLines(data: Uint8Array, atEOF: boolean): [number, Uint8Array, any]
+    function scanWords(data: Uint8Array, atEOF: boolean): [number, Uint8Array, any]
+    function scanRunes(data: Uint8Array, atEOF: boolean): [number, Uint8Array, any]
+    function scanBytes(data: Uint8Array, atEOF: boolean): [number, Uint8Array, any]
+}
+
+/**
+ * Go bytes module (subset). Requires the `system` scope.
+ */
+declare namespace $bytes {
+    function newBuffer(buf: Uint8Array | null): any
+    function newBufferString(s: string): any
+    function newReader(b: Uint8Array): any
+}
+
+/**
+ * Go filepath module (subset). Requires the `system` scope.
+ */
+declare namespace $filepath {
+    function base(path: string): string
+    function clean(path: string): string
+    function dir(path: string): string
+    function ext(path: string): string
+    function fromSlash(path: string): string
+    function toSlash(path: string): string
+    function isAbs(path: string): boolean
+    function join(...paths: string[]): string
+    function rel(basepath: string, targpath: string): string
+    function split(path: string): [string, string]
+    function splitList(path: string): string[]
+    function glob(basePath: string, pattern: string): string[]
+    function walk(root: string, walkFn: any): void
+    function walkDir(root: string, walkFn: any): void
+}
+
+/**
+ * OS helper tasks (download dir, archive extraction, async commands).
+ * Requires the `system` scope.
+ */
+declare namespace $osExtra {
+    /** Moves a directory up one level, deleting the wrapper folder. */
+    function unwrapAndMove(src: string, dest: string): void
+    function unzip(src: string, dest: string): void
+    function unrar(src: string, dest: string): void
+    /** Returns the platform's Downloads directory path. */
+    function downloadDir(): string
+    function desktopDir(): string
+    function documentsDir(): string
+    /** Returns the configured anime library directories. */
+    function libraryDirs(): string[]
+
+    /**
+     * Runs a command asynchronously, streaming stdout/stderr to the callback.
+     * The process is NOT killed when the caller's promise/callback returns.
+     * Requires the command to be within the plugin's commandScopes.
+     *
+     * @param name - The executable name
+     * @param args - Arguments for the executable
+     */
+    function asyncCmd(name: string, arg?: string[]): AsyncCmd
+}
+
+/**
+ * A running async command. Streams output to the callback passed to `Run`.
+ */
+declare class AsyncCmd {
+    /** The underlying exec.Cmd object. */
+    getCommand(): any
+
+    /**
+     * Starts the command. The callback is invoked as data arrives and once
+     * when the process exits. Invocations with a `stdout` value carry a line of
+     * stdout; with a `stderr` value carry a line of stderr; the final call
+     * carries `exitCode`/`signal` (exitCode 0 = success).
+     */
+    run(callback: (stdout?: Uint8Array, stderr?: Uint8Array, exitCode?: number, signal?: string) => void): void
+}

@@ -1,0 +1,52 @@
+{
+  "id": "streamdownloader",
+  "name": "Stream Downloader",
+  "version": "1.0.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamDownloader/manifest.json",
+  "language": "typescript",
+  "type": "plugin",
+  "description": "Download online-streaming (HLS/mp4) sources for anime episodes to disk. Search any installed streaming provider, pick an episode, and save it to your Downloads folder (or a custom directory).",
+  "author": "aor-rex",
+  "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamDownloader/icon.png",
+  "website": "https://github.com/aor-rex/seanime-extensions",
+  "lang": "en",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamDownloader/main.ts",
+  "isDevelopment": false,
+  "userConfig": {
+    "requiresConfig": true,
+    "version": 1,
+    "fields": [
+      {
+        "name": "server-base-url",
+        "label": "Seanime server base URL",
+        "type": "text",
+        "default": "http://127.0.0.1:43211"
+      },
+      {
+        "name": "download-dir",
+        "label": "Download directory (must be inside your Downloads or anime library folder; empty = Downloads)",
+        "type": "text",
+        "default": ""
+      }
+    ]
+  },
+  "plugin": {
+    "version": "1",
+    "permissions": {
+      "scopes": ["system", "storage"],
+      "allow": {
+        "networkAccess": {
+          "allowedDomains": ["127.0.0.1", "localhost"]
+        },
+        "writePaths": ["$DOWNLOAD/**", "$SEANIME_ANIME_LIBRARY/**"],
+        "commandScopes": [
+          {
+            "description": "Runs ffmpeg to download HLS (m3u8) streams to the selected file.",
+            "command": "ffmpeg",
+            "args": [{ "validator": "$ARGS" }]
+          }
+        ]
+      }
+    }
+  }
+}

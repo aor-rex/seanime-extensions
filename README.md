@@ -42,6 +42,14 @@ The bundled `anime-torrent-provider.d.ts` / `core.d.ts` were added (they're miss
 - `AnimeTorrent.magnetLink` / `infoHash` now allow `null`.
 - `Media` gains `seasonYear`.
 
+### Stream Downloader (`src/StreamDownloader`)
+Tray plugin that downloads online-streaming episode sources to disk:
+
+- Searches any installed streaming provider (e.g. HiAnime) via the Seanime loopback API and AniList.
+- Picks a source per episode — **MP4** (`ctx.downloader`, with live progress + cancel) or **HLS m3u8** (`ffmpeg -c copy`, progress parsed from stderr).
+- Downloads land in your Downloads folder by default, or a custom directory inside your Downloads/anime-library folder.
+- Requires the app's online-streaming feature enabled, a streaming provider extension installed, and ffmpeg on PATH for m3u8 downloads.
+
 ## Setup
 
 1. Install the extensions in Seanime:
@@ -60,6 +68,7 @@ The bundled `anime-torrent-provider.d.ts` / `core.d.ts` were added (they're miss
    | **EZTV** | torrent provider | `eztv` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EZTV/manifest.json` |
    | **ThePirateBay V2** | torrent provider | `thepiratebayv2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TPB/manifest.json` |
    | **Torrentio V2** | torrent provider | `torrentiov2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json` |
+   | **Stream Downloader** | plugin | `streamdownloader` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamDownloader/manifest.json` |
 
 2. SIMKL needs a **Client ID** (from https://simkl.com/settings/developer/) and, for the watchlist, an **Access Token** — generate one with the OAuth helper at `auth/callback.html` (see below).
 

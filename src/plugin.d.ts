@@ -15,6 +15,23 @@ declare namespace $ui {
         state<T>(initialValue?: T): State<T>
 
         /**
+         * Creates a new field ref for reading/writing a form field's value.
+         * Bind it to an input/select/checkbox via the `fieldRef` prop.
+         */
+        fieldRef<T = string>(initialValue?: T): FieldRef<T>
+
+        /**
+         * Downloads a file to disk with progress tracking and cancellation.
+         *
+         * Requires the `system` scope and non-strict security mode.
+         * The download runs in the background; track it via `watch`/`getProgress`.
+         *
+         * @returns The download ID
+         * @throws If the destination path is not authorized or the request fails to start
+         */
+        downloader: Downloader
+
+        /**
          * Sets an interval to execute a function repeatedly.
          * @returns A function to cancel the interval
          */
@@ -319,6 +336,62 @@ declare namespace $ui {
 
         /** Sets the callback to be called when the value changes */
         onValueChange(callback: (value: T) => void): void
+    }
+
+    type DownloadStatus = "downloading" | "completed" | "cancelled" | "error";
+
+    interface DownloadProgress {
+        /** Unique download ID */
+        id: string
+        /** Source URL */
+        url: string
+        /** Destination path */
+        destination: string
+        /** Bytes transferred so far */
+        totalBytes: number
+        /** Total size in bytes (-1/0 if unknown) */
+        totalSize: number
+        /** Transfer speed in bytes/sec */
+        speed: number
+        /** Progress percentage (0-100) */
+        percentage: number
+        /** Current status */
+        status: DownloadStatus
+        /** Error message when status is "error" */
+        error?: string
+        /** Last progress update time */
+        lastUpdate: string
+        /** Download start time */
+        startTime: string
+    }
+
+    interface Downloader {
+        /**
+         * Starts streaming a URL to disk.
+         * @param url - The source URL
+         * @param destination - Absolute destination path (must be within the plugin's writePaths)
+         * @param options - { headers?, timeout? } where timeout is in seconds
+         * @returns The download ID
+         */
+        download(url: string, destination: string, options?: { headers?: Record<string, string>, timeout?: number }): string
+
+        /**
+         * Subscribes to progress updates for a download.
+         * @returns A function to cancel the subscription
+         */
+        watch(downloadID: string, callback: (progress: DownloadProgress) => void): () => void
+
+        /** Gets the current progress of a download. */
+        getProgress(downloadID: string): DownloadProgress | null
+
+        /** Lists all tracked downloads. */
+        listDownloads(): DownloadProgress[]
+
+        /** Cancels a download. */
+        cancel(downloadID: string): void
+
+        /** Cancels all downloads. */
+        cancelAll(): void
     }
 }
 
