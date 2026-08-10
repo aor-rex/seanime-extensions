@@ -1,7 +1,7 @@
 {
   "id": "streamdownloader",
   "name": "Stream Downloader",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamDownloader/manifest.json",
   "language": "typescript",
   "type": "plugin",
