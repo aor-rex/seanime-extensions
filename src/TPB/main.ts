@@ -84,7 +84,15 @@ class Provider {
     // Thousand-Year Blood War - The Calamity"), so normalize it away. Hyphens
     // inside words ("Thousand-Year") are left untouched.
     private sanitize(q: string): string {
-        return q.replace(/\s+-\s+/g, " ").replace(/\s+/g, " ").trim()
+        // apibay returns "No results returned" when a token contains punctuation
+        // (e.g. "man's" or "caribbean:") or when the query is not all-lowercase,
+        // so normalize the query before sending it.
+        return q
+            .toLowerCase()
+            .replace(/[''":]/g, "")
+            .replace(/\s+-\s+/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
     }
 
     private isVideoCategory(cat: string): boolean {
@@ -317,7 +325,7 @@ class Provider {
         // Batch search: apibay rarely has a "complete" or "season" token, so the
         // precise query often comes back empty. Fall back to a title-only query
         // and keep anything that looks like a batch.
-        if (opts.batch) {
+        if (!isMovie && opts.batch) {
             if (torrents.length === 0) {
                 let fb = base
                 if (resToken) fb += ` ${resToken}`
@@ -332,7 +340,9 @@ class Provider {
         // "SxxEyy" suffix rarely matches real torrent names (season offsets,
         // absolute episode numbers, etc.). Fall back to a title-only query and
         // keep batches + torrents that parse to the requested season/episode.
-        if (opts.episodeNumber > 0) {
+        // Movies always arrive with episodeNumber=1 from the frontend, so skip
+        // this branch entirely for them.
+        if (!isMovie && opts.episodeNumber > 0) {
             if (torrents.length === 0) {
                 let fb = base
                 if (resToken) fb += ` ${resToken}`

@@ -181,6 +181,13 @@ class Provider {
         return Math.round(val * (mult[unit] ?? 1))
     }
 
+    private formatBytes(size: number): string {
+        if (!size) return ""
+        const i = Math.floor(Math.log(size) / Math.log(1024))
+        const units = ["B", "KB", "MB", "GB", "TB"]
+        return (size / Math.pow(1024, i)).toFixed(2) + " " + (units[i] || "B")
+    }
+
     // Map a media format to an EXT category id.
     private categoryFor(media: Media): string {
         if (this.isMovie(media)) return "1" // Movies
@@ -242,7 +249,7 @@ class Provider {
             name: title,
             date: this.parseDate(cells.date),
             size: cells.size,
-            formattedSize: "",
+            formattedSize: cells.size ? this.formatBytes(cells.size) : "",
             seeders: cells.seeders,
             leechers: cells.leechers,
             downloadCount: 0,
@@ -345,7 +352,7 @@ class Provider {
         // Batch search: extto.com often doesn't index the literal word "complete"
         // in batch torrent titles, so the precise query can come back empty. Fall
         // back to a title-only query and keep anything that looks like a batch.
-        if (opts.batch) {
+        if (!isMovie && opts.batch) {
             if (torrents.length === 0) {
                 let fb = base
                 if (opts.resolution) fb += ` ${opts.resolution}`
@@ -358,8 +365,9 @@ class Provider {
         // Single-episode search: the query "SxxEyy" suffix rarely matches real
         // torrent names (season offsets, absolute episode numbers, etc.). Fall
         // back to a title-only query and keep batches + torrents that parse to
-        // the requested season/episode.
-        if (opts.episodeNumber > 0) {
+        // the requested season/episode. Movies always arrive with episodeNumber=1
+        // from the frontend, so skip this branch entirely for them.
+        if (!isMovie && opts.episodeNumber > 0) {
             if (torrents.length === 0) {
                 let fb = base
                 if (opts.resolution) fb += ` ${opts.resolution}`
@@ -446,7 +454,7 @@ class Provider {
             name: title,
             date: this.parseDate(cells.date),
             size: cells.size,
-            formattedSize: "",
+            formattedSize: cells.size ? this.formatBytes(cells.size) : "",
             seeders: cells.seeders,
             leechers: cells.leechers,
             downloadCount: 0,
