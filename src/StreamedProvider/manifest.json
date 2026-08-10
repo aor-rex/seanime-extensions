@@ -1,5 +1,5 @@
 {
-  "id": "streamed",
+  "id": "streamedprovider",
   "name": "Streamed (Sports)",
   "version": "1.0.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamedProvider/manifest.json",
