@@ -19,18 +19,21 @@
 
 function init() {
 	// ---- pre-update: stash the new status/score ----
+	// Store minimal primitive objects only: the core clone/marshal layer for
+	// $store.set is happy with plain JSON-safe values, but goja can panic on
+	// rich nested clones of the event object.
 	$app.onPreUpdateEntry((e) => {
-		$store.set("PRE_UPDATE_ENTRY_DATA", $clone(e));
+		$store.set("PRE_UPDATE_ENTRY_DATA", { mediaId: e.mediaId, status: e.status, scoreRaw: e.scoreRaw });
 	});
 
 	// ---- post-update: trigger the SIMKL push ----
 	$app.onPostUpdateEntry((e) => {
-		$store.set("POST_UPDATE_ENTRY", $clone(e));
+		$store.set("POST_UPDATE_ENTRY", { mediaId: e.mediaId });
 	});
 
 	// ---- post-delete: remove the entry from SIMKL ----
 	$app.onPostDeleteEntry((e) => {
-		$store.set("POST_DELETE_ENTRY", $clone(e));
+		$store.set("POST_DELETE_ENTRY", { mediaId: e.mediaId });
 	});
 
 	// ---- UI VM: react to the store bridges and do the async work ----
@@ -165,12 +168,22 @@ function init() {
 			return CUSTOM_SOURCE_OFFSET + extIdentifier * 2 ** 40 + localId;
 		}
 
-		// Encode a local id using the SIMKL / TMDB extension schemes:
+		// Encode a local id using the TMDB extension scheme:
 		// movie 1e9+id, tv 2e9+id*1000+season, anime 3e9+id*1000+season.
 		function encodeLocalId(type: "movie" | "tv" | "anime", externalId: number, season: number): number {
 			const n = Number(externalId);
 			if (type === "movie") return 1000000000 + n;
 			const base = type === "anime" ? 3000000000 : 2000000000;
+			const s = Math.max(1, Math.min(season || 1, 999));
+			return base + n * 1000 + s;
+		}
+
+		// Encode a local id using the SIMKL V2 extension scheme (SIMKL/main.ts):
+		// movie 1e10+id, tv 2e10+id*1000+season, anime 3e10+id*1000+season.
+		function encodeSimklLocalId(type: "movie" | "tv" | "anime", externalId: number, season: number): number {
+			const n = Number(externalId);
+			if (type === "movie") return 10000000000 + n;
+			const base = type === "anime" ? 30000000000 : 20000000000;
 			const s = Math.max(1, Math.min(season || 1, 999));
 			return base + n * 1000 + s;
 		}
@@ -365,7 +378,7 @@ function init() {
 						plannedAny = true;
 					} else if (lookup.simklV2Ext) {
 						for (const season of seasons) {
-							planned.push({ mediaId: buildMediaId(lookup.simklV2Ext, encodeLocalId(type, simklId, season)), status, scoreRaw });
+							planned.push({ mediaId: buildMediaId(lookup.simklV2Ext, encodeSimklLocalId(type, simklId, season)), status, scoreRaw });
 						}
 						plannedAny = true;
 					}
@@ -662,22 +675,22 @@ function init() {
 		}
 
 		$store.watch("POST_UPDATE_ENTRY", async (e) => {
-			if (!isEnabled()) return;
-
-			const data = $store.get<{ mediaId?: number; status?: string; scoreRaw?: number }>("PRE_UPDATE_ENTRY_DATA");
-			if (!data || data.mediaId !== e.mediaId) return;
-			$store.set("PRE_UPDATE_ENTRY_DATA", null);
-
-			// Skip entries written by a reverse-sync pull so they don't get pushed back
-			// to SIMKL (they came FROM there).
-			const pending = $storage.get("listsync.pull.pending");
-			if (Array.isArray(pending) && pending.includes(e.mediaId)) {
-				const remaining = pending.filter((id) => id !== e.mediaId);
-				$storage.set("listsync.pull.pending", remaining);
-				return;
-			}
-
 			try {
+				if (!isEnabled()) return;
+
+				const data = $store.get<{ mediaId?: number; status?: string; scoreRaw?: number }>("PRE_UPDATE_ENTRY_DATA");
+				if (!data || data.mediaId !== e.mediaId) return;
+				$store.set("PRE_UPDATE_ENTRY_DATA", null);
+
+				// Skip entries written by a reverse-sync pull so they don't get pushed back
+				// to SIMKL (they came FROM there).
+				const pending = $storage.get("listsync.pull.pending");
+				if (Array.isArray(pending) && pending.includes(e.mediaId)) {
+					const remaining = pending.filter((id) => id !== e.mediaId);
+					$storage.set("listsync.pull.pending", remaining);
+					return;
+				}
+
 				await pushStatus({ mediaId: data.mediaId!, status: data.status, scoreRaw: data.scoreRaw });
 			} catch (err) {
 				console.error(`listsync: sync error -> ${(err as Error).message}`);
@@ -685,10 +698,10 @@ function init() {
 		});
 
 		$store.watch("POST_DELETE_ENTRY", async (e) => {
-			if (!isEnabled()) return;
-			if (!e.mediaId || e.mediaId < CUSTOM_SOURCE_OFFSET) return;
-
 			try {
+				if (!isEnabled()) return;
+				if (!e.mediaId || e.mediaId < CUSTOM_SOURCE_OFFSET) return;
+
 				const media = $anilist.getAnime(e.mediaId);
 				if (!media || !media.siteUrl) return;
 

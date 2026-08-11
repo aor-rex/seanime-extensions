@@ -1,7 +1,7 @@
 {
   "id": "listsync",
   "name": "ListSync",
-  "version": "1.4.3",
+  "version": "1.4.4",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json",
   "language": "typescript",
   "type": "plugin",

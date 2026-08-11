@@ -375,7 +375,7 @@ class Provider implements CustomSource {
 
     // ---------------------------------------------------------------- media conversion
 
-    private toALBaseAnime(item: SimklItem, opts: { type: SimklMediaType; season: number; episodeCount: number; status?: string }): $app.AL_BaseAnime | null {
+    private toALBaseAnime(item: SimklItem, opts: { type: SimklMediaType; season: number; episodeCount: number; status?: string; listStatus?: string }): $app.AL_BaseAnime | null {
         const simklId = this.idOf(item)
         if (!simklId) return null
 
@@ -405,7 +405,7 @@ class Provider implements CustomSource {
             genres: this.strArray(item.genres),
             meanScore: this.meanScore(item),
             synonyms: this.strArray(item.all_titles),
-            status: (opts.status ?? this.airStatus(item)) as $app.AL_MediaStatus,
+            status: (opts.listStatus ? this.toListBadge(opts.listStatus) : opts.status ?? this.airStatus(item)) as $app.AL_MediaStatus,
             episodes: isMovie ? 1 : (this.num(opts.episodeCount) ?? 1),
             type: "ANIME",
             format: this.format(type) as $app.AL_MediaFormat,
@@ -419,6 +419,20 @@ class Provider implements CustomSource {
         }
     }
 
+    // Map a SIMKL watchlist status to a card status badge. Best-effort: AL_BaseAnime
+    // has no list-status field, so the watchlist view reuses the status badge.
+    private toListBadge(simklStatus: string): string {
+        const map: Record<string, string> = {
+            plantowatch: "PLANNING",
+            watching: "CURRENT",
+            completed: "COMPLETED",
+            dropped: "DROPPED",
+            hold: "PAUSED",
+            repeating: "REPEATING",
+        }
+        return map[simklStatus] ?? simklStatus.toUpperCase()
+    }
+
     private pushMedia(media: $app.AL_BaseAnime[], seen: Set<number>, m: $app.AL_BaseAnime | null | undefined): void {
         if (m && !seen.has(m.id)) {
             seen.add(m.id)
@@ -426,19 +440,19 @@ class Provider implements CustomSource {
         }
     }
 
-    private async itemToCards(item: SimklItem, type: SimklMediaType): Promise<$app.AL_BaseAnime[]> {
+    private async itemToCards(item: SimklItem, type: SimklMediaType, listStatus?: string): Promise<$app.AL_BaseAnime[]> {
         if (this.hideAnime && type === "anime") return []
         const simklId = this.idOf(item)
         if (!simklId) return []
 
         if (type === "movie") {
-            const m = this.toALBaseAnime(item, { type, season: 1, episodeCount: 1 })
+            const m = this.toALBaseAnime(item, { type, season: 1, episodeCount: 1, listStatus })
             return m ? [m] : []
         }
 
         const info = await this.seasonInfo(simklId, type)
         if (!info) {
-            const m = this.toALBaseAnime(item, { type, season: 1, episodeCount: this.episodeCount(item) })
+            const m = this.toALBaseAnime(item, { type, season: 1, episodeCount: this.episodeCount(item), listStatus })
             return m ? [m] : []
         }
 
@@ -449,19 +463,20 @@ class Provider implements CustomSource {
                 season: Number(seasonStr),
                 episodeCount: count,
                 status: info.statuses?.[Number(seasonStr)],
+                listStatus,
             })
             this.pushMedia(cards, new Set(), m)
         }
         return cards
     }
 
-    private async itemsToMedia(items: SimklItem[], forcedType?: SimklMediaType): Promise<$app.AL_BaseAnime[]> {
+    private async itemsToMedia(items: SimklItem[], forcedType?: SimklMediaType, listStatus?: string): Promise<$app.AL_BaseAnime[]> {
         const media: $app.AL_BaseAnime[] = []
         const seen = new Set<number>()
         for (const item of items) {
             const type = forcedType ?? this.typeOf(item)
             if (this.hideAnime && type === "anime") continue
-            const cards = await this.itemToCards(item, type)
+            const cards = await this.itemToCards(item, type, listStatus)
             for (const m of cards) this.pushMedia(media, seen, m)
         }
         return media
@@ -1120,7 +1135,7 @@ class Provider implements CustomSource {
                 for (const entry of wl.movies ?? []) {
                     const item = entry?.movie ?? entry?.show
                     if (!item) continue
-                    const m = this.toALBaseAnime(item, { type: "movie", season: 1, episodeCount: 1 })
+                    const m = this.toALBaseAnime(item, { type: "movie", season: 1, episodeCount: 1, listStatus: entry?.status })
                     this.pushMedia(media, seen, m)
                 }
 
@@ -1143,11 +1158,12 @@ class Provider implements CustomSource {
                                 season: seasonNum,
                                 episodeCount: count,
                                 status: info?.statuses?.[seasonNum],
+                                listStatus: entry?.status,
                             })
                             this.pushMedia(media, seen, m)
                         }
                     } else {
-                        const cards = await this.itemToCards(item, "tv")
+                        const cards = await this.itemToCards(item, "tv", entry?.status)
                         for (const m of cards) this.pushMedia(media, seen, m)
                     }
                 }
@@ -1156,7 +1172,7 @@ class Provider implements CustomSource {
                     for (const entry of wl.anime ?? []) {
                         const item = entry?.show
                         if (!item) continue
-                        const cards = await this.itemToCards(item, "anime")
+                        const cards = await this.itemToCards(item, "anime", entry?.status)
                         for (const m of cards) this.pushMedia(media, seen, m)
                     }
                 }
