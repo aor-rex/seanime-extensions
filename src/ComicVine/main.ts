@@ -27,6 +27,7 @@ const FIELD_LIST = [
 
 class Provider implements CustomSource {
     api_key = "{{api-key}}"
+    western_comics_only = "{{western-only}}"
 
     getSettings(): Settings {
         return {
@@ -140,6 +141,8 @@ class Provider implements CustomSource {
         const media: $app.AL_BaseManga[] = []
 
         for (const result of results) {
+            if (this._westernOnly() && this._isMangaLike(result)) continue
+
             const m = this._volumeToMedia(result)
             if (this._isFiniteMedia(m)) {
                 cache[m.id] = m
@@ -277,6 +280,35 @@ class Provider implements CustomSource {
     private _hasApiKey(): boolean {
         const key = this._apiKey()
         return key.length > 0 && !key.includes("{{")
+    }
+
+    private _westernOnly(): boolean {
+        return String(this.western_comics_only || "").trim() === "true"
+    }
+
+    // Best-effort "is manga" detection. ComicVine exposes no country, language,
+    // or manga flag on volumes (see /volume and /publisher docs), so this relies
+    // on: "manga" in the name/aliases, CJK characters in the name, or a
+    // manga-only publisher. International manga editions (e.g. Naruto@Carlsen,
+    // Hellsing@Dark Horse) may still slip through.
+    private _isMangaLike(result: any): boolean {
+        const name = String(result?.name || "")
+        const aliases = String(result?.aliases || "")
+
+        if (/manga|mang[áàâäã]/i.test(name) || /manga|mang[áàâäã]/i.test(aliases)) return true
+
+        const cjk = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uac00-\ud7af]/
+        if (cjk.test(name)) return true
+
+        const publisher = String(result?.publisher?.name || "").toLowerCase()
+        const mangaPublishers = [
+            "shueisha", "shogakukan", "kodansha", "viz", "tokyopop", "yen press",
+            "seven seas", "square enix", "kadokawa", "ichijinsha", "houbunsha",
+            "akita shoten", "hakusensha", "futabasha", "media factory",
+            "ascii media works", "del rey manga", "cmx", "one peace", "vertical",
+            "shonen gahosha", "bungeishunju",
+        ]
+        return mangaPublishers.some(p => publisher.includes(p))
     }
 
     // ---------------------------------------------------------------- cache
