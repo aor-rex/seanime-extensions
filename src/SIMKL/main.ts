@@ -624,6 +624,42 @@ class Provider implements CustomSource {
         return { edges }
     }
 
+    // Builds relation edges for every sibling season of a series (Season 1, 2,
+    // 4, ... when viewing Season 3), typed PREQUEL/SEQUEL relative to the
+    // current season. Movies have no seasons and yield no edges.
+    private buildSeasonRelations(item: SimklItem, type: "tv" | "anime", currentSeason: number, info: SimklSeasonInfo): $app.AL_AnimeDetailsById_Media_Relations_Edges[] {
+        if (!info) return []
+
+        const seasons = Object.keys(info.counts)
+            .map(Number)
+            .filter(s => Number.isFinite(s) && s > 0 && s !== currentSeason)
+            .sort((a, b) => a - b)
+
+        const edges: $app.AL_AnimeDetailsById_Media_Relations_Edges[] = []
+        for (const season of seasons) {
+            const node = this.toALBaseAnime(item, {
+                type,
+                season,
+                episodeCount: info.counts[season],
+                status: info.statuses?.[season],
+            })
+            if (!node) continue
+            edges.push({
+                node,
+                relationType: season < currentSeason ? "PREQUEL" : "SEQUEL",
+            })
+        }
+        return edges
+    }
+
+    // Merges existing relation edges with season edges, keeping existing ones
+    // first and respecting the shared cap on the Relations grid.
+    private mergeRelationEdges(existing: $app.AL_AnimeDetailsById_Media_Relations_Edges[], extra: $app.AL_AnimeDetailsById_Media_Relations_Edges[], cap = 12): $app.AL_AnimeDetailsById_Media_Relations | undefined {
+        const edges = [...existing, ...extra].slice(0, cap)
+        if (edges.length === 0) return undefined
+        return { edges }
+    }
+
     private async buildRecommendations(item: SimklItem, type: SimklMediaType): Promise<$app.AL_AnimeDetailsById_Media_Recommendations | undefined> {
         const recs = item.users_recommendations ?? []
         if (recs.length === 0) return undefined
@@ -926,8 +962,15 @@ class Provider implements CustomSource {
         if (!item || !item.ids) return null
 
         const score = this.meanScore(item)
-        const relations = await this.buildRelations(item, decoded.type)
+        let relations = await this.buildRelations(item, decoded.type)
         const recommendations = await this.buildRecommendations(item, decoded.type)
+
+        if (decoded.type !== "movie") {
+            const info = await this.seasonInfo(decoded.simklId, decoded.type)
+            if (info) {
+                relations = this.mergeRelationEdges(relations?.edges ?? [], this.buildSeasonRelations(item, decoded.type, decoded.season, info))
+            }
+        }
 
         const details: $app.AL_AnimeDetailsById_Media = {
             id: id,
@@ -1014,7 +1057,10 @@ class Provider implements CustomSource {
         })
         if (!base) throw new Error("not found.")
 
-        const relations = await this.buildRelations(item, decoded.type)
+        let relations = await this.buildRelations(item, decoded.type)
+        if (info && decoded.type !== "movie") {
+            relations = this.mergeRelationEdges(relations?.edges ?? [], this.buildSeasonRelations(item, decoded.type, decoded.season, info))
+        }
 
         const mediaCache = $store.get<Record<number, $app.AL_BaseAnime>>("simkl.media") ?? {}
         mediaCache[id] = base
