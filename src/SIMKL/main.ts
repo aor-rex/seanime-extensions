@@ -626,14 +626,22 @@ class Provider implements CustomSource {
 
     // Builds relation edges for every sibling season of a series (Season 1, 2,
     // 4, ... when viewing Season 3), typed PREQUEL/SEQUEL relative to the
-    // current season. Movies have no seasons and yield no edges.
+    // current season. Seasons are ordered by distance from the current one so
+    // the UI's relation grid shows the closest neighbors on both sides;
+    // sequels win ties so "what's next" appears alongside "what came before".
+    // Movies have no seasons and yield no edges.
     private buildSeasonRelations(item: SimklItem, type: "tv" | "anime", currentSeason: number, info: SimklSeasonInfo): $app.AL_AnimeDetailsById_Media_Relations_Edges[] {
         if (!info) return []
 
         const seasons = Object.keys(info.counts)
             .map(Number)
             .filter(s => Number.isFinite(s) && s > 0 && s !== currentSeason)
-            .sort((a, b) => a - b)
+            .sort((a, b) => {
+                const da = Math.abs(a - currentSeason)
+                const db = Math.abs(b - currentSeason)
+                if (da !== db) return da - db
+                return (a > currentSeason ? 0 : 1) - (b > currentSeason ? 0 : 1)
+            })
 
         const edges: $app.AL_AnimeDetailsById_Media_Relations_Edges[] = []
         for (const season of seasons) {
