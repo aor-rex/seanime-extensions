@@ -652,10 +652,20 @@ class Provider implements CustomSource {
         return edges
     }
 
-    // Merges existing relation edges with season edges, keeping existing ones
-    // first and respecting the shared cap on the Relations grid.
-    private mergeRelationEdges(existing: $app.AL_AnimeDetailsById_Media_Relations_Edges[], extra: $app.AL_AnimeDetailsById_Media_Relations_Edges[], cap = 12): $app.AL_AnimeDetailsById_Media_Relations | undefined {
-        const edges = [...existing, ...extra].slice(0, cap)
+    // Merges two groups of relation edges, keeping the priority group first (so
+    // sibling seasons stay visible within the UI's relation grid) and
+    // respecting a shared cap. Duplicate node ids are dropped.
+    private mergeRelationEdges(priority: $app.AL_AnimeDetailsById_Media_Relations_Edges[], secondary: $app.AL_AnimeDetailsById_Media_Relations_Edges[], cap = 16): $app.AL_AnimeDetailsById_Media_Relations | undefined {
+        const edges: $app.AL_AnimeDetailsById_Media_Relations_Edges[] = []
+        const seen = new Set<number>()
+        for (const edge of [...priority, ...secondary]) {
+            if (edges.length >= cap) break
+            const nodeId = edge?.node?.id
+            if (nodeId === undefined || nodeId === null) continue
+            if (seen.has(nodeId)) continue
+            seen.add(nodeId)
+            edges.push(edge)
+        }
         if (edges.length === 0) return undefined
         return { edges }
     }
@@ -968,7 +978,7 @@ class Provider implements CustomSource {
         if (decoded.type !== "movie") {
             const info = await this.seasonInfo(decoded.simklId, decoded.type)
             if (info) {
-                relations = this.mergeRelationEdges(relations?.edges ?? [], this.buildSeasonRelations(item, decoded.type, decoded.season, info))
+                relations = this.mergeRelationEdges(this.buildSeasonRelations(item, decoded.type, decoded.season, info), relations?.edges ?? [])
             }
         }
 
@@ -1059,7 +1069,7 @@ class Provider implements CustomSource {
 
         let relations = await this.buildRelations(item, decoded.type)
         if (info && decoded.type !== "movie") {
-            relations = this.mergeRelationEdges(relations?.edges ?? [], this.buildSeasonRelations(item, decoded.type, decoded.season, info))
+            relations = this.mergeRelationEdges(this.buildSeasonRelations(item, decoded.type, decoded.season, info), relations?.edges ?? [])
         }
 
         const mediaCache = $store.get<Record<number, $app.AL_BaseAnime>>("simkl.media") ?? {}
