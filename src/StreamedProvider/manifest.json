@@ -1,7 +1,7 @@
 {
   "id": "streamedprovider",
   "name": "Streamed (Sports)",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamedProvider/manifest.json",
   "language": "typescript",
   "type": "onlinestream-provider",
