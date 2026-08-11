@@ -28,6 +28,16 @@ Two-way sync between your SIMKL watchlist and your SIMKL V2 / TMDB V2 custom-sou
 
 Manifest URL: `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/ListSync/manifest.json`
 
+### Simkl Matcher (`src/SimklMatcher`)
+Tray plugin that resolves seanime's **unmatched** movies/series automatically via SIMKL:
+
+- **Scan library** lists every unresolved group and file count from `GET /api/v1/library/collection`.
+- **Match unresolved** searches SIMKL (`/search/tv` + `/search/movie`), scores title (+ year), builds the exact runtime media id SIMKL V2 uses (SIMKL encoded id → `2^31 + simklv2 extensionIdentifier << 40 + localId`, the identifier resolved at runtime), and calls `POST /api/v1/library/anime-entry/manual-match` — same call the match-selection UI makes.
+- Skips anime (files with known fansub tags, and anime hits are never picked), reports a per-item status (Matched / No match / Skipped / Error), and persists the last run.
+- Needs the **SIMKL Client ID** (same key as SIMKL V2) set in the plugin's config, and SIMKL V2 installed.
+
+Manifest URL: `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SimklMatcher/manifest.json`
+
 ### Torrent providers (`src/*`)
 | Provider | Type | Notes |
 |---|---|---|
@@ -69,6 +79,7 @@ Tray plugin that downloads online-streaming episode sources to disk:
    | **ThePirateBay V2** | torrent provider | `thepiratebayv2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/TPB/manifest.json` |
    | **Torrentio V2** | torrent provider | `torrentiov2` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json` |
    | **Stream Downloader** | plugin | `streamdownloader` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/StreamDownloader/manifest.json` |
+   | **Simkl Matcher** | plugin | `simkl-matcher` | `https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SimklMatcher/manifest.json` |
 
 2. SIMKL needs a **Client ID** (from https://simkl.com/settings/developer/) and, for the watchlist, an **Access Token** — generate one with the OAuth helper at `auth/callback.html` (see below).
 
