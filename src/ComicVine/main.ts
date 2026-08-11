@@ -141,8 +141,10 @@ class Provider implements CustomSource {
 
         for (const result of results) {
             const m = this._volumeToMedia(result)
-            cache[m.id] = m
-            media.push(m)
+            if (this._isFiniteMedia(m)) {
+                cache[m.id] = m
+                media.push(m)
+            }
         }
 
         this._setMediaCache(cache)
@@ -220,8 +222,15 @@ class Provider implements CustomSource {
             synonyms: aliases,
             genres: publisher ? [publisher] : [],
             type: "MANGA",
-            startDate: result?.start_year ? { year: Number(result.start_year) } : undefined,
+            startDate: this._startDate(result?.start_year),
         }
+    }
+
+    private _startDate(startYear: any): { year: number } | undefined {
+        if (startYear === undefined || startYear === null) return undefined
+        if (typeof startYear === "string" && !startYear.trim()) return undefined
+        const year = Number(startYear)
+        return Number.isFinite(year) ? { year } : undefined
     }
 
     private _decodeId(id: number): { resource: string, numericId: number } | null {
@@ -240,6 +249,12 @@ class Provider implements CustomSource {
         if (typeof aliases !== "string" || !aliases.trim()) return []
         const parts = aliases.split("\n").map(a => a.trim()).filter(a => a.length > 0)
         return parts.slice(0, 10)
+    }
+
+    private _isFiniteMedia(m: any): boolean {
+        const values: any[] = []
+        if (m) values.push(m.id, m.chapters, m.startDate?.year)
+        return values.every(v => v === undefined || v === null || (typeof v === "number" && Number.isFinite(v)))
     }
 
     private _cleanHtml(input: any): string {
