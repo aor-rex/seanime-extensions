@@ -300,5 +300,3 @@ class Provider implements CustomSource {
         }
     }
 }
-
-export = new Provider() as CustomSource

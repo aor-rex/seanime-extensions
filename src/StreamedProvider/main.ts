@@ -272,4 +272,3 @@ class Provider {
     }
 }
 
-export = new Provider()
