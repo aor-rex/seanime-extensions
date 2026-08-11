@@ -1,7 +1,7 @@
 {
   "id": "simklv2",
   "name": "Simkl V2",
-  "version": "2.5.4",
+  "version": "2.5.5",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SIMKL/manifest.json",
   "language": "typescript",
   "type": "custom-source",

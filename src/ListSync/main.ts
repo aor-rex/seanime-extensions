@@ -301,14 +301,47 @@ function init() {
 
 		// Pull the user's SIMKL watchlist and write status/score into the target
 		// custom-source lists (SIMKL / TMDB extension) via $anilist.updateEntry.
+
+		// Live pull progress, surfaced as "Pulling {current}/{total}" + a bar in the
+		// Sync tab. `running` stays true for the whole pull so the tray can render it.
+		const pullProgress = {
+			running: ctx.state<boolean>(false),
+			current: ctx.state<number>(0),
+			total: ctx.state<number>(0),
+		};
+
+		// Yield to the event loop (and the tray) once. Each pull yields every few
+		// entries so a large watchlist doesn't freeze the UI and the progress bar
+		// actually renders.
+		function yieldToTray(): Promise<void> {
+			return new Promise<void>((resolve) => {
+				const stop = ctx.setInterval(() => {
+					stop();
+					resolve();
+				}, 0);
+			});
+		}
+
+		function clearPullProgress(): void {
+			pullProgress.running.set(false);
+			pullProgress.current.set(0);
+			pullProgress.total.set(0);
+			tray.update();
+		}
+
 		async function pullFromSimkl(): Promise<{ pushed: number; skipped: number }> {
 			console.log("listsync: pull started");
+			pullProgress.running.set(true);
+			pullProgress.current.set(0);
+			pullProgress.total.set(0);
+			tray.update();
 			const clientId = $getUserPreference("client-id");
 			const accessToken = resolveAccessToken();
 			if (!clientId || !accessToken) {
 				console.log("listsync: pull skipped - missing client-id / access-token");
 				pushActivity("pull", "Reverse sync skipped: set your Client ID / Access Token first", "error");
 				ctx.toast.error("ListSync: set your Client ID and Access Token to pull from SIMKL");
+				clearPullProgress();
 				return { pushed: 0, skipped: 0 };
 			}
 
@@ -328,6 +361,7 @@ function init() {
 			if (!simklAnyExt && !tmdbExt) {
 				pushActivity("pull", "No SIMKL/TMDB entries in your collection yet — add one first", "error");
 				ctx.toast.error("ListSync: add a SIMKL/TMDB entry to your collection before pulling");
+				clearPullProgress();
 				return { pushed: 0, skipped: 0 };
 			}
 
@@ -348,6 +382,7 @@ function init() {
 				console.error(`listsync: pull watchlist HTTP ${res.status}`);
 				pushActivity("pull", `Failed to fetch SIMKL watchlist (HTTP ${res.status})`, "error");
 				ctx.toast.error(`ListSync: failed to fetch watchlist (HTTP ${res.status})`);
+				clearPullProgress();
 				return { pushed: 0, skipped: 0 };
 			}
 
@@ -447,6 +482,9 @@ function init() {
 			console.log(`listsync: pull applying ${planned.length} update(s)`);
 			let failed = 0;
 			const total = planned.length;
+			pullProgress.total.set(total);
+			pullProgress.current.set(0);
+			tray.update();
 			for (let i = 0; i < total; i++) {
 				const entry = planned[i];
 				try {
@@ -455,8 +493,14 @@ function init() {
 					failed++;
 					console.error(`listsync: updateEntry failed for media ${entry.mediaId} -> ${(err as Error).message}`);
 				}
+				pullProgress.current.set(i + 1);
 				if ((i + 1) % 50 === 0 || i + 1 === total) {
 					console.log(`listsync: pull progress ${i + 1}/${total} (${failed} failed)`);
+				}
+				// Yield every few entries so the tray can render the live progress.
+				if ((i + 1) % 5 === 0 || i + 1 === total) {
+					await yieldToTray();
+					tray.update();
 				}
 			}
 			console.log(`listsync: pull done (applied=${total - failed}, failed=${failed})`);
@@ -472,6 +516,7 @@ function init() {
 			} else {
 				pushActivity("pull", `Nothing to pull${skipped ? ` (${skipped} skipped)` : ""}`, "ok");
 			}
+			clearPullProgress();
 			return { pushed, skipped };
 		}
 
@@ -873,6 +918,49 @@ function init() {
 		function syncTabItems(): any[] {
 			const items: any[] = [];
 			const connected = loginState.connected.get();
+			const pulling = pullProgress.running.get();
+
+			if (pulling) {
+				const current = pullProgress.current.get();
+				const total = pullProgress.total.get();
+				const pct = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+				items.push(
+					tray.stack(
+						[
+							tray.flex(
+								[
+									tray.text(`Pulling ${current}/${total}`, { className: "text-xs font-medium" }),
+									tray.text(`${pct}%`, { className: "text-xs opacity-60" }),
+								],
+								{ gap: 8 }
+							),
+							tray.div(
+								[
+									tray.div([], {
+										style: {
+											width: `${pct}%`,
+											height: "100%",
+											background: "#10b981",
+											borderRadius: "9999px",
+											transition: "width 150ms ease",
+										},
+									}),
+								],
+								{
+									style: {
+										width: "100%",
+										height: "6px",
+										background: "rgba(148,163,184,0.25)",
+										borderRadius: "9999px",
+										overflow: "hidden",
+									},
+								}
+							),
+						],
+						{ gap: 6 }
+					)
+				);
+			}
 
 			if (connected) {
 				items.push(
@@ -891,6 +979,8 @@ function init() {
 							}),
 							tray.button("Pull from SIMKL", {
 								intent: "success",
+								disabled: pulling,
+								loading: pulling,
 								onClick: ctx.eventHandler("listsync:tray:pull", () => {
 									pullFromSimkl().catch((err) => {
 										pushActivity("pull", `Pull error: ${(err as Error).message}`, "error");
