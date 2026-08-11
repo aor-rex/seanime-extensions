@@ -626,25 +626,39 @@ class Provider implements CustomSource {
 
     // Builds relation edges for every sibling season of a series (Season 1, 2,
     // 4, ... when viewing Season 3), typed PREQUEL/SEQUEL relative to the
-    // current season. Seasons are ordered by distance from the current one so
-    // the UI's relation grid shows the closest neighbors on both sides;
-    // sequels win ties so "what's next" appears alongside "what came before".
-    // Movies have no seasons and yield no edges.
+    // current season. The head of the list is the 2 nearest prequels followed by
+    // the 2 nearest sequels (prequels first, each group ascending); if one side
+    // is short, the head is padded from the other side. Remaining seasons follow
+    // in ascending order. Movies have no seasons and yield no edges.
     private buildSeasonRelations(item: SimklItem, type: "tv" | "anime", currentSeason: number, info: SimklSeasonInfo): $app.AL_AnimeDetailsById_Media_Relations_Edges[] {
         if (!info) return []
 
-        const seasons = Object.keys(info.counts)
-            .map(Number)
-            .filter(s => Number.isFinite(s) && s > 0 && s !== currentSeason)
-            .sort((a, b) => {
-                const da = Math.abs(a - currentSeason)
-                const db = Math.abs(b - currentSeason)
-                if (da !== db) return da - db
-                return (a > currentSeason ? 0 : 1) - (b > currentSeason ? 0 : 1)
-            })
+        const prequels: number[] = []
+        const sequels: number[] = []
+        for (const rawSeason of Object.keys(info.counts)) {
+            const s = Number(rawSeason)
+            if (!Number.isFinite(s) || s <= 0 || s === currentSeason) continue
+            if (s < currentSeason) prequels.push(s)
+            else sequels.push(s)
+        }
+        prequels.sort((a, b) => a - b)
+        sequels.sort((a, b) => a - b)
+
+        let nPre = Math.min(2, prequels.length)
+        let nSeq = Math.min(2, sequels.length)
+        const deficit = 4 - nPre - nSeq
+        if (deficit > 0) {
+            const takePre = Math.min(deficit, prequels.length - nPre)
+            nPre += takePre
+            nSeq += deficit - takePre
+        }
+
+        const head = [...prequels.slice(-nPre), ...sequels.slice(0, nSeq)]
+        const headSet = new Set(head)
+        const order = [...head, ...[...prequels, ...sequels].filter(s => !headSet.has(s))]
 
         const edges: $app.AL_AnimeDetailsById_Media_Relations_Edges[] = []
-        for (const season of seasons) {
+        for (const season of order) {
             const node = this.toALBaseAnime(item, {
                 type,
                 season,
