@@ -401,32 +401,40 @@ class Provider {
         if (torrent.magnetLink) return torrent.magnetLink
         try {
             const id = this.idFromHref(torrent.link)
+            console.log(`[ext-magnet] idFromHref id="${id}" href=${torrent.link}`)
             if (!id) return ""
 
             // The magnet endpoint only accepts sessions established from the
             // homepage. Fetch it first to get a valid PHPSESSID cookie, then
             // reuse it for the detail page and the magnet request.
+            console.log("[ext-magnet] fetching homepage for session")
             const sessRes = await fetch(`${this.api}/`, {
                 headers: { Referer: `${this.api}/` },
             })
+            console.log(`[ext-magnet] sess status=${sessRes.status} ok=${sessRes.ok} contentType=${sessRes.contentType} bodyLen=${sessRes.text().length} cookies=${JSON.stringify(sessRes.cookies)}`)
             if (!sessRes.ok) return ""
             const session = sessRes.cookies?.PHPSESSID || ""
+            console.log(`[ext-magnet] session captured=${session.length > 0}`)
             if (!session) return ""
 
+            console.log("[ext-magnet] fetching detail page")
             const res = await fetch(torrent.link, {
                 headers: { Referer: `${this.api}/`, Cookie: `PHPSESSID=${session}` },
             })
-            if (!res.ok) return ""
             const html = res.text()
+            console.log(`[ext-magnet] detail status=${res.status} ok=${res.ok} contentType=${res.contentType} htmlLen=${html.length}`)
+            if (!res.ok) return ""
 
             const pageToken = (html.match(/window\.pageToken\s*=\s*'([^']+)'/) || [])[1] || ""
             const csrfToken = (html.match(/window\.csrfToken\s*=\s*'([^']+)'/) || [])[1] || ""
+            console.log(`[ext-magnet] pageToken="${pageToken}" csrf="${csrfToken}"`)
             if (!pageToken || !csrfToken) return ""
 
             const timestamp = Math.floor(Date.now() / 1000)
             const hmac = CryptoJS.enc.Hex.stringify(CryptoJS.SHA256(`${id}|${timestamp}|${pageToken}`))
             const body = `torrent_id=${encodeURIComponent(id)}&download_type=magnet&timestamp=${timestamp}&hmac=${hmac}&sessid=${encodeURIComponent(csrfToken)}`
 
+            console.log("[ext-magnet] posting magnet request")
             const post = await fetch(`${this.api}/ajax/getTorrentMagnet.php`, {
                 method: "POST",
                 headers: {
@@ -437,13 +445,16 @@ class Provider {
                 },
                 body: body,
             })
+            console.log(`[ext-magnet] post status=${post.status} ok=${post.ok} body=${post.text()}`)
             if (!post.ok) return ""
             const data = post.json<{ success: boolean; url?: string; hash?: string }>()
+            console.log(`[ext-magnet] data success=${data?.success} url=${data?.url?.slice(0, 60)} hash=${data?.hash}`)
             if (!data || !data.success) return ""
             if (data.url) return data.url
             if (data.hash) return `magnet:?xt=urn:btih:${data.hash}`
             return ""
         } catch (err) {
+            console.log(`[ext-magnet] caught error: ${err}`)
             return ""
         }
     }
