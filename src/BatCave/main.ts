@@ -16,10 +16,11 @@
 // The proof-of-work is a brute-force over a nonce:
 //     find nonce where sha256(token + ":" + nonce) starts with "00"
 //
-// The chapter image API and image CDN do NOT require the trust cookie:
-//   - POST /engine/ajax/controller.php?mod=api&action=reader/getChapterData
-//     (JSON body { news_id, chapter_id }) -> { success, data: { images } }
+// The chapter image CDN does NOT require the trust cookie:
 //   - img.batcave.biz only needs Referer: https://batcave.biz/
+// Chapter pages are read from the reader page's inline __DATA__.images
+// (anonymous readers get rdr_ajax:false, so the page already embeds every
+// image URL). The legacy chapter API (reader/getChapterData) is not used.
 
 function sha256hex(msg: string): string {
 	const K = [1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
@@ -78,12 +79,22 @@ type ChaptersData = {
 	chapters: { id: string | number; posi: number; title: string; date: string }[]
 }
 
-type ChapterApiResponse = {
-	success?: boolean
-	data: { chapter_id: string | number; title: string; images: string[] }
+type ReaderData = {
+	news_id: number
+	chapter_id: number
+	pages?: number
+	rdr_ajax?: boolean
+	images?: string[]
+	chapters?: { id: number; title: string }[]
 }
 
 class Provider implements MangaProvider {
+	getSettings(): Settings {
+		const settings = { supportsAnime: false, supportsManga: true } as Settings & { supportsMultiLanguage?: boolean }
+		settings.supportsMultiLanguage = false
+		return settings
+	}
+
 	private get trustCookie(): string {
 		const v = $store.get<string>(TRUST_KEY)
 		return v || ""
@@ -202,7 +213,7 @@ class Provider implements MangaProvider {
 		const cookies = res.cookies || {}
 		const trust = cookies["__guard_trust"]
 		if (!trust) throw new Error("BatCave: DLE-Guard did not issue a trust cookie")
-		this.trustCookie = trust
+		this.trustCookie = `__guard_trust=${trust}`
 	}
 
 	// ---------------------------------------------------------------- search
@@ -262,16 +273,45 @@ class Provider implements MangaProvider {
 	}
 
 	private _extractChapters(html: string): ChaptersData {
+		const data = this._extractData<ChaptersData>(html)
+		if (!data || !data.news_id || !data.chapters) throw new Error("BatCave: invalid chapter data")
+		return data
+	}
+
+	// Pulls the JSON object embedded in a `window.__DATA__ = {...};` inline
+	// script. Used by both series pages (chapters) and reader pages (images).
+	private _extractData<T>(html: string): T | undefined {
 		const marker = "window.__DATA__ ="
 		const idx = html.indexOf(marker)
-		if (idx === -1) throw new Error("BatCave: series page missing __DATA__")
-		const after = html.substring(idx + marker.length)
-		const endBrace = after.indexOf("};")
-		if (endBrace === -1) throw new Error("BatCave: series page has malformed __DATA__")
-		const jsonBlock = after.substring(0, endBrace + 1).trim()
-		const data = JSON.parse(jsonBlock) as ChaptersData
-		if (!data.news_id || !data.chapters) throw new Error("BatCave: invalid chapter data")
-		return data
+		if (idx === -1) return undefined
+		let i = idx + marker.length
+		while (i < html.length && /\s/.test(html[i])) i++
+		if (html[i] !== "{") return undefined
+		let depth = 0
+		let inString = false
+		let start = i
+		for (; i < html.length; i++) {
+			const c = html[i]
+			if (inString) {
+				if (c === "\\") i++
+				else if (c === '"') inString = false
+				continue
+			}
+			if (c === '"') inString = true
+			else if (c === "{") depth++
+			else if (c === "}") {
+				depth--
+				if (depth === 0) {
+					const block = html.substring(start, i + 1)
+					try {
+						return JSON.parse(block) as T
+					} catch {
+						return undefined
+					}
+				}
+			}
+		}
+		return undefined
 	}
 
 	// "9.08.2026" (dd.MM.yyyy) -> "2026-08-09"
@@ -289,24 +329,16 @@ class Provider implements MangaProvider {
 		const newsId = id.substring(0, sep)
 		const chapterId = id.substring(sep + 1)
 
-		const body = JSON.stringify({ news_id: newsId, chapter_id: chapterId })
-		const res = await this._req(`${BATCAVE_BASE}/engine/ajax/controller.php?mod=api&action=reader/getChapterData`, {
-			method: "POST",
-			headers: {
-				"User-Agent": UA,
-				"Content-Type": "application/json",
-				Referer: BATCAVE_BASE + "/",
-				Origin: BATCAVE_BASE,
-				"X-Requested-With": "XMLHttpRequest",
-			},
-			body,
-		})
-		if (!res.ok) throw new Error(`BatCave: chapter API failed with status ${res.status}`)
+		// Anonymous readers get rdr_ajax:false, so the reader page already
+		// embeds every image URL in window.__DATA__.images.
+		const res = await this._html(`${BATCAVE_BASE}/reader/${newsId}/${chapterId}`)
+		const html = res.text()
+		const data = this._extractData<ReaderData>(html)
+		const images = (data && data.images) || []
+		if (!images.length) throw new Error("BatCave: reader page missing images")
 
-		const parsed = res.json<ChapterApiResponse>()
-		const data = parsed.data || (parsed as any)
-		return ((data && data.images) || []).map((img: string, i: number) => ({
-			url: img.startsWith("http") ? img.trim() : BATCAVE_BASE + img.trim(),
+		return images.map((img, i) => ({
+			url: img.trim(),
 			index: i,
 			headers: { Referer: IMG_REFERER },
 		}))
