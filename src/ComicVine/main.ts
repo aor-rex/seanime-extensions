@@ -7,10 +7,13 @@
 //   3000000000 + ComicVine volume numeric id
 //
 // Medium details are fetched on demand from the `/volume/4050-{id}/` endpoint
-// and cached (versioned) in $store so browsing/searching stays within the API
-// rate limit (200 requests per resource per hour).
+// (plus the first/last issue for characters and a couple of searches for
+// relations/recommendations) and cached (versioned) in $store so browsing,
+// searching, and detail views stay within the API rate limit (200 requests per
+// resource per hour).
 
 const COMICVINE_CACHE_VERSION = 1
+const COMICVINE_DETAILS_CACHE_VERSION = 1
 const ID_OFFSET = 3000000000
 
 const FIELD_LIST = [
@@ -23,6 +26,19 @@ const FIELD_LIST = [
     "count_of_issues",
     "site_detail_url",
     "publisher",
+].join(",")
+
+const DETAILS_FIELD_LIST = [
+    "id",
+    "name",
+    "start_year",
+    "count_of_issues",
+    "description",
+    "image",
+    "publisher",
+    "first_issue",
+    "last_issue",
+    "site_detail_url",
 ].join(",")
 
 class Provider implements CustomSource {
@@ -90,14 +106,37 @@ class Provider implements CustomSource {
     }
 
     async getMangaDetails(id: number): Promise<$app.AL_MangaDetailsById_Media | null> {
-        return {
+        const cache = this._getDetailsCache()
+        const cached = cache[id]
+        if (cached) return cached
+
+        const decoded = this._decodeId(id)
+        if (!decoded) return null
+
+        const volume = await this._apiGet("/volume/" + decoded.resource + "/", {
+            field_list: DETAILS_FIELD_LIST,
+        })
+        const result = (volume as any)?.results
+        if (!result || typeof result.id === "undefined") return null
+
+        const publisher = String(result?.publisher?.name || "").trim()
+
+        const characters = await this._getCharacters(result)
+        const relations = await this._getRelations(result, id)
+        const recommendations = await this._getRecommendations(result, id, characters, relations)
+
+        const details: $app.AL_MangaDetailsById_Media = {
             id: id,
-            genres: [],
-            siteUrl: "",
-            relations: { edges: [] },
-            rankings: [],
-            recommendations: { edges: [] },
+            genres: publisher ? [publisher] : [],
+            siteUrl: String(result?.site_detail_url || "").trim(),
+            characters: characters,
+            relations: relations,
+            recommendations: recommendations,
         }
+
+        cache[id] = details
+        this._setDetailsCache(cache)
+        return details
     }
 
     async listManga(search: string, page: number, perPage: number): Promise<ListResponse<$app.AL_BaseManga>> {
@@ -236,6 +275,133 @@ class Provider implements CustomSource {
         return Number.isFinite(year) ? { year } : undefined
     }
 
+    // Characters only exist on issues, so the first and last issue are fetched
+    // and their credits merged. Characters appearing in both issues are treated
+    // as the main cast.
+    private async _getCharacters(volume: any): Promise<$app.AL_MangaDetailsById_Media_Characters | undefined> {
+        const issueIds: number[] = []
+        const firstId = Number(volume?.first_issue?.id)
+        const lastId = Number(volume?.last_issue?.id)
+        if (firstId) issueIds.push(firstId)
+        if (lastId && lastId !== firstId) issueIds.push(lastId)
+        if (issueIds.length === 0) return undefined
+
+        const counts = new Map<number, number>()
+        const byId = new Map<number, any>()
+
+        for (const issueId of issueIds) {
+            const issue = await this._apiGet("/issue/4000-" + issueId + "/", {
+                field_list: "id,character_credits",
+            })
+            const credits = (issue as any)?.results?.character_credits || []
+            for (const credit of credits) {
+                const creditId = Number(credit?.id)
+                if (!creditId) continue
+                byId.set(creditId, credit)
+                counts.set(creditId, (counts.get(creditId) || 0) + 1)
+            }
+        }
+
+        if (byId.size === 0) return undefined
+
+        const edges: $app.AL_MangaDetailsById_Media_Characters_Edges[] = []
+
+        for (const [creditId, credit] of Array.from(byId.entries()).slice(0, 20)) {
+            const name = String(credit?.name || "").trim()
+            if (!name) continue
+            edges.push({
+                id: creditId,
+                name: name,
+                role: (counts.get(creditId) || 0) >= issueIds.length ? "MAIN" : "SUPPORTING",
+                node: {
+                    id: creditId,
+                    isFavourite: false,
+                    name: { full: name },
+                    siteUrl: String(credit?.site_detail_url || "").trim(),
+                },
+            })
+        }
+
+        return edges.length > 0 ? { edges } : undefined
+    }
+
+    // ComicVine exposes no relation graph, so same-title editions (e.g. the
+    // international editions of a series) are surfaced as ALTERNATIVE relations.
+    private async _getRelations(volume: any, selfId: number): Promise<$app.AL_MangaDetailsById_Media_Relations | undefined> {
+        const name = String(volume?.name || "").trim()
+        if (!name) return undefined
+
+        const env = await this._apiGet("/search/", {
+            query: name,
+            resources: "volume",
+            field_list: FIELD_LIST,
+            limit: "20",
+        })
+        const results = (env as any)?.results || []
+        const edges: $app.AL_MangaDetailsById_Media_Relations_Edges[] = []
+
+        for (const result of results) {
+            if (edges.length >= 8) break
+            if (this._westernOnly() && this._isMangaLike(result)) continue
+
+            const media = this._volumeToMedia(result)
+            if (!this._isFiniteMedia(media) || media.id === selfId) continue
+
+            edges.push({ node: media, relationType: "ALTERNATIVE" })
+        }
+
+        return edges.length > 0 ? { edges } : undefined
+    }
+
+    // Recommendations are derived from the volume's top character: other volumes
+    // featuring that character. Skipped when no characters were found.
+    private async _getRecommendations(
+        volume: any,
+        selfId: number,
+        characters?: $app.AL_MangaDetailsById_Media_Characters,
+        relations?: $app.AL_MangaDetailsById_Media_Relations,
+    ): Promise<$app.AL_MangaDetailsById_Media_Recommendations | undefined> {
+        const characterName = this._topCharacterName(characters)
+        if (!characterName) return undefined
+
+        const env = await this._apiGet("/search/", {
+            query: characterName,
+            resources: "volume",
+            field_list: FIELD_LIST,
+            limit: "20",
+        })
+        const results = (env as any)?.results || []
+
+        const excluded = new Set<number>([selfId])
+        if (relations?.edges) {
+            for (const edge of relations.edges) {
+                if (edge.node?.id) excluded.add(edge.node.id)
+            }
+        }
+
+        const edges: $app.AL_MangaDetailsById_Media_Recommendations_Edges[] = []
+
+        for (const result of results) {
+            if (edges.length >= 10) break
+            if (this._westernOnly() && this._isMangaLike(result)) continue
+
+            const media = this._volumeToMedia(result)
+            if (!this._isFiniteMedia(media) || excluded.has(media.id)) continue
+
+            edges.push({ node: { mediaRecommendation: media as any } })
+        }
+
+        return edges.length > 0 ? { edges } : undefined
+    }
+
+    private _topCharacterName(characters?: $app.AL_MangaDetailsById_Media_Characters): string {
+        const edges = characters?.edges || []
+        if (edges.length === 0) return ""
+
+        const primary = edges.find(e => e.role === "MAIN") || edges[0]
+        return String(primary?.node?.name?.full || primary?.name || "").trim()
+    }
+
     private _decodeId(id: number): { resource: string, numericId: number } | null {
         const numericId = Number(id)
         if (!numericId || numericId < ID_OFFSET) return null
@@ -327,6 +493,23 @@ class Provider implements CustomSource {
         $store.set("comicvine.media", {
             version: COMICVINE_CACHE_VERSION,
             media: cache,
+        })
+    }
+
+    private _getDetailsCache(): Record<number, $app.AL_MangaDetailsById_Media> {
+        const raw = $store.get("comicvine.details") as { version?: number, details?: Record<number, $app.AL_MangaDetailsById_Media> } | undefined
+
+        if (!raw || raw.version !== COMICVINE_DETAILS_CACHE_VERSION || !raw.details) {
+            return {}
+        }
+
+        return raw.details
+    }
+
+    private _setDetailsCache(cache: Record<number, $app.AL_MangaDetailsById_Media>) {
+        $store.set("comicvine.details", {
+            version: COMICVINE_DETAILS_CACHE_VERSION,
+            details: cache,
         })
     }
 }
