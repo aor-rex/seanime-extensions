@@ -403,8 +403,18 @@ class Provider {
             const id = this.idFromHref(torrent.link)
             if (!id) return ""
 
-            const res = await fetch(torrent.link, {
+            // The magnet endpoint only accepts sessions established from the
+            // homepage. Fetch it first to get a valid PHPSESSID cookie, then
+            // reuse it for the detail page and the magnet request.
+            const sessRes = await fetch(`${this.api}/`, {
                 headers: { Referer: `${this.api}/` },
+            })
+            if (!sessRes.ok) return ""
+            const session = sessRes.cookies?.PHPSESSID || ""
+            if (!session) return ""
+
+            const res = await fetch(torrent.link, {
+                headers: { Referer: `${this.api}/`, Cookie: `PHPSESSID=${session}` },
             })
             if (!res.ok) return ""
             const html = res.text()
@@ -423,7 +433,7 @@ class Provider {
                     Referer: torrent.link,
                     "Content-Type": "application/x-www-form-urlencoded",
                     "X-Requested-With": "XMLHttpRequest",
-                    Cookie: `PHPSESSID=${res.cookies.PHPSESSID || ""}`,
+                    Cookie: `PHPSESSID=${session}`,
                 },
                 body: body,
             })
