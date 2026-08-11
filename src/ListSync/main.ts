@@ -312,13 +312,12 @@ function init() {
 
 		// Yield to the event loop (and the tray) once. Each pull yields every few
 		// entries so a large watchlist doesn't freeze the UI and the progress bar
-		// actually renders.
+		// actually renders. NOTE: use setTimeout, not setInterval — a 0-delay
+		// interval would enqueue async jobs as fast as the runtime can loop and
+		// fill the scheduler queue ("async job queue is full").
 		function yieldToTray(): Promise<void> {
 			return new Promise<void>((resolve) => {
-				const stop = ctx.setInterval(() => {
-					stop();
-					resolve();
-				}, 0);
+				ctx.setTimeout(resolve, 0);
 			});
 		}
 
@@ -331,6 +330,10 @@ function init() {
 
 		async function pullFromSimkl(): Promise<{ pushed: number; skipped: number }> {
 			console.log("listsync: pull started");
+			if (pullProgress.running.get()) {
+				console.log("listsync: pull skipped - already running");
+				return { pushed: 0, skipped: 0 };
+			}
 			pullProgress.running.set(true);
 			pullProgress.current.set(0);
 			pullProgress.total.set(0);

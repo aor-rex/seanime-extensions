@@ -32,6 +32,12 @@ declare namespace $ui {
         downloader: Downloader
 
         /**
+         * Sets a timeout to execute a function once.
+         * @returns A function to cancel the timeout
+         */
+        setTimeout(fn: () => void, delay: number): () => void
+
+        /**
          * Sets an interval to execute a function repeatedly.
          * @returns A function to cancel the interval
          */
