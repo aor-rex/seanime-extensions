@@ -1,7 +1,7 @@
 {
   "id": "batcave",
   "name": "BatCave",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/BatCave/manifest.json",
   "language": "typescript",
   "type": "manga-provider",
@@ -12,9 +12,4 @@
   "lang": "en",
   "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/BatCave/main.ts",
   "isDevelopment": false,
-  "userConfig": {
-    "requiresConfig": false,
-    "version": 1,
-    "fields": []
-  }
 }
