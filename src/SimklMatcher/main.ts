@@ -36,7 +36,6 @@ function init() {
 		// Seanime custom-source runtime id layout (customsource/customsource.go)
 		const CUSTOM_SOURCE_OFFSET = 2147483648; // 2^31
 		const MAX_EXT_IDENTIFIER = 1023;
-		const MAX_LOCAL_ID = (2 ** 40) - 1; // 2^40 - 1
 
 		const SIMKL_EXTENSION_ID = "simklv2";
 		const MATCH_THRESHOLD = 8;
@@ -165,9 +164,11 @@ function init() {
 		}
 
 		// Seanime runtime id: 2^31 + (extensionIdentifier << 40) + localId.
+		// NOTE: bitwise `&` truncates to 32-bit, corrupting localId >= 2^31;
+		// use modulo masks instead.
 		function buildMediaId(extIdentifier: number, localId: number): number {
-			const ei = Number(extIdentifier) & MAX_EXT_IDENTIFIER;
-			const lid = Number(localId) & MAX_LOCAL_ID;
+			const ei = Number(extIdentifier) % (MAX_EXT_IDENTIFIER + 1);
+			const lid = Number(localId) % (2 ** 40);
 			return CUSTOM_SOURCE_OFFSET + ei * (2 ** 40) + lid;
 		}
 
@@ -231,18 +232,30 @@ function init() {
 			const all: SimklItem[] = [];
 			const types = ["tv", "movie"];
 			for (const t of types) {
-				const res = await fetch(`${SIMKL_API_BASE}/search/${t}?q=${q}&page=1&limit=10&extended=full`, {
-					headers: {
-						"Content-Type": "application/json",
-						"simkl-api-key": SIMKL_CLIENT_ID,
-					},
-					timeout: 45,
-					noCloudflareBypass: true,
-				});
-				if (!res.ok) continue;
-				const data = res.json<any>();
-				if (Array.isArray(data)) {
-					for (const it of data) all.push(it);
+				const url = `${SIMKL_API_BASE}/search/${t}?q=${q}&page=1&limit=10&extended=full`;
+				for (let attempt = 0; attempt < 3; attempt++) {
+					try {
+						const res = await fetch(url, {
+							headers: {
+								"Content-Type": "application/json",
+								"simkl-api-key": SIMKL_CLIENT_ID,
+							},
+							timeout: 45,
+							noCloudflareBypass: true,
+						});
+						if (!res.ok) {
+							if (attempt === 2) break;
+							continue;
+						}
+						const data = res.json<any>();
+						if (Array.isArray(data)) {
+							for (const it of data) all.push(it);
+						}
+						break;
+					} catch (err) {
+						// Transient network error (timeout / TLS hiccup): retry.
+						if (attempt === 2) throw err;
+					}
 				}
 			}
 			return all;
