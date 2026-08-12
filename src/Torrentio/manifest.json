@@ -1,7 +1,7 @@
 {
   "id": "torrentiov2",
   "name": "Torrentio V2",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
@@ -40,7 +40,7 @@
       {
         "type": "text",
         "name": "torrentioQualityfilter",
-        "label": "Exclude Resolutions (comma separated: brremux,hdrall,dolbyvision,dolbyvisionwithhdr,threed,nonthreed,4k,1080p,720p,480p,other,scr,cam,unknown)",
+        "label": "Exclude Resolutions (comma separated:4k,1080p,720p,480p,other,scr,cam,unknown)",
         "default": ""
       },
       {
@@ -58,7 +58,7 @@
       {
         "type": "text",
         "name": "torrentioTmdbApiKey",
-        "label": "TMDB API Key (optional; enables title-based IMDb fallback for new series not found via ARM/YUNA)",
+        "label": "TMDB API Key (optional; enables title-based IMDb fallback for new series)",
         "default": ""
       },
       {
