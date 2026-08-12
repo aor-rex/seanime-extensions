@@ -24,7 +24,7 @@
 
 function init() {
 	$ui.register((ctx) => {
-		const TRAY_ICON = "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SimklMatcher/icon.png";
+		const TRAY_ICON = "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/SimklMatcher/icon.jpg";
 		const SERVER_BASE_DEFAULT = "http://127.0.0.1:43211";
 
 		// SIMKL V2 id scheme (must stay in sync with src/SIMKL/main.ts)
@@ -385,6 +385,7 @@ function init() {
 		}
 
 		async function matchCluster(cluster: MatchCluster, extIdentifier: number): Promise<MatchResult> {
+			let mediaId: number | undefined;
 			try {
 				const items = await searchSimkl(cluster.title);
 				let best: { item: SimklItem; score: number } | undefined;
@@ -400,14 +401,18 @@ function init() {
 				}
 
 				if (!best) {
-					return { cluster, status: "no-match", message: "No SIMKL match found" };
+					return {
+						cluster,
+						status: "no-match",
+						message: `No SIMKL match found for "${cluster.label}"`,
+					};
 				}
 
 				const t = typeOf(best.item);
 				const sid = simklIdOf(best.item)!;
 				const season = t === "movie" ? 1 : cluster.season;
 				const local = encodeSimklId(t, sid, season);
-				const mediaId = buildMediaId(extIdentifier, local);
+				mediaId = buildMediaId(extIdentifier, local);
 
 				await api("/api/v1/library/anime-entry/manual-match", {
 					paths: cluster.paths,
@@ -421,14 +426,17 @@ function init() {
 					matchTitle: best.item.title || best.item.en_title || t,
 				};
 			} catch (err) {
-				return { cluster, status: "error", message: (err as Error).message };
+				return {
+					cluster,
+					status: "error",
+					message: `${(err as Error).message}${mediaId !== undefined ? ` · mediaId ${mediaId}` : ""}`,
+				};
 			}
 		}
 
 		async function scan(): Promise<void> {
 			status.set("Scanning library...");
 			working.set(true);
-			tray.update();
 			try {
 				const groups = await fetchUnmatched();
 				unmatched.set(groups);
@@ -497,8 +505,6 @@ function init() {
 						});
 						continue;
 					}
-					status.set(`Matching ${i + 1}/${clusters.length} — ${entry.cluster.label}...`);
-					tray.update();
 					results.push(await matchCluster(entry.cluster, extIdentifier));
 				}
 
