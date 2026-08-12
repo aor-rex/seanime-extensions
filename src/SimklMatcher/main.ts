@@ -74,6 +74,7 @@ function init() {
 			year?: number;
 			paths: string[];
 			label: string;
+			isSeries: boolean;
 		}
 
 		interface SimklIds {
@@ -313,7 +314,7 @@ function init() {
 			if (files.length === 0) return [];
 
 			const baseDir = dirBaseName(group?.dir || "");
-			const byKey = new Map<string, { title: string; season: number; year?: number; paths: string[] }>();
+			const byKey = new Map<string, { title: string; season: number; year?: number; isSeries: boolean; paths: string[] }>();
 
 			for (const lf of files) {
 				const p = lf.parsedInfo ?? {};
@@ -328,10 +329,11 @@ function init() {
 
 				let cluster = byKey.get(key);
 				if (!cluster) {
-					cluster = { title, season, paths: [] };
+					cluster = { title, season, isSeries: false, paths: [] };
 					byKey.set(key, cluster);
 				}
 				if (!cluster.year) cluster.year = year;
+				if (p.episode && String(p.episode).trim() !== "") cluster.isSeries = true;
 				cluster.paths.push(lf.path);
 			}
 
@@ -342,6 +344,7 @@ function init() {
 					season: c.season,
 					year: c.year,
 					paths: c.paths,
+					isSeries: c.isSeries,
 					label: c.year ? `${c.title} (${c.year})` : c.title,
 				});
 			});
@@ -402,18 +405,25 @@ function init() {
 			try {
 				const items = await searchSimkl(cluster.title);
 				let best: { item: SimklItem; score: number } | undefined;
+				let bestOther: { item: SimklItem; score: number } | undefined;
+				const wantMovie = !cluster.isSeries;
 				for (const item of items) {
 					const t = typeOf(item);
 					if (t === "anime") continue;
 					const sid = simklIdOf(item);
 					if (!sid) continue;
 					const s = scoreHit(cluster.title, cluster.year, item);
-					if (s >= MATCH_THRESHOLD && (!best || s > best.score)) {
-						best = { item, score: s };
+					if (s < MATCH_THRESHOLD) continue;
+					const isPreferredType = wantMovie ? t === "movie" : t !== "movie";
+					const target = isPreferredType ? best : bestOther;
+					if (!target || s > target.score) {
+						if (isPreferredType) best = { item, score: s };
+						else bestOther = { item, score: s };
 					}
 				}
 
-				if (!best) {
+				const selection = best ?? bestOther;
+				if (!selection) {
 					return {
 						cluster,
 						status: "no-match",
@@ -421,8 +431,8 @@ function init() {
 					};
 				}
 
-				const t = typeOf(best.item);
-				const sid = simklIdOf(best.item)!;
+				const t = typeOf(selection.item);
+				const sid = simklIdOf(selection.item)!;
 				const season = t === "movie" ? 1 : cluster.season;
 				const local = encodeSimklId(t, sid, season);
 				mediaId = buildMediaId(extIdentifier, local);
@@ -436,7 +446,7 @@ function init() {
 					cluster,
 					status: "matched",
 					mediaId,
-					matchTitle: best.item.title || best.item.en_title || t,
+					matchTitle: selection.item.title || selection.item.en_title || t,
 				};
 			} catch (err) {
 				return {
