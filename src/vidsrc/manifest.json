@@ -1,0 +1,27 @@
+{
+  "id": "vidsrc",
+  "name": "VidSrc",
+  "version": "1.0.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/vidsrc/manifest.json",
+  "language": "typescript",
+  "type": "onlinestream-provider",
+  "description": "Streams anime, series and movies from vidsrc (https://vidsrc.mov/). Requires a SIMKL Client ID for title matching.",
+  "author": "aor-rex",
+  "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/vidsrc/icon.png",
+  "website": "https://github.com/aor-rex/seanime-extensions",
+  "lang": "multi",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/vidsrc/main.ts",
+  "isDevelopment": false,
+  "userConfig": {
+    "requiresConfig": true,
+    "version": 1,
+    "fields": [
+      {
+        "name": "simkl-client-id",
+        "label": "SIMKL Client ID (API key)",
+        "type": "text",
+        "default": ""
+      }
+    ]
+  }
+}
