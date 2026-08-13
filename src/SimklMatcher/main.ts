@@ -122,7 +122,7 @@ function init() {
 		// ------------------------------------------------------------------
 
 		async function api<T = any>(path: string, body?: any): Promise<T> {
-			const res = await fetch(baseUrl() + path, {
+			const res = await ctx.fetch(baseUrl() + path, {
 				method: body !== undefined ? "POST" : "GET",
 				headers: { "Content-Type": "application/json" },
 				body,
@@ -236,7 +236,7 @@ function init() {
 				const url = `${SIMKL_API_BASE}/search/${t}?q=${q}&page=1&limit=10&extended=full`;
 				for (let attempt = 0; attempt < 3; attempt++) {
 					try {
-						const res = await fetch(url, {
+						const res = await ctx.fetch(url, {
 							headers: {
 								"Content-Type": "application/json",
 								"simkl-api-key": SIMKL_CLIENT_ID,
@@ -654,15 +654,16 @@ function init() {
 				);
 				for (const r of results) {
 					const badge = resultBadge(r);
+					const fileCount = r?.cluster?.paths?.length ?? 0;
 					const detail = r.status === "matched"
-						? `${r.matchTitle || ""} · ${r.cluster.paths.length} file${r.cluster.paths.length === 1 ? "" : "s"}`
+						? `${r.matchTitle || ""} · ${fileCount} file${fileCount === 1 ? "" : "s"}`
 						: (r.message || badge.text);
 					items.push(
 						tray.stack(
 							[
 								tray.flex(
 									[
-										tray.text(r.cluster.label, { className: "text-xs font-medium truncate" }),
+										tray.text(r.cluster?.label ?? "", { className: "text-xs font-medium truncate" }),
 										tray.badge(badge.text, { intent: badge.intent, size: "sm" }),
 									],
 									{ gap: 6 }

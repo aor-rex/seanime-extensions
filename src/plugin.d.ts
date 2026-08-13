@@ -61,6 +61,11 @@ declare namespace $ui {
         newTray(options: TrayOptions): Tray
 
         /**
+         * Fetch bound to the plugin's scheduler. Prefer over the global fetch.
+         */
+        fetch(url: string, options?: FetchOptions): Promise<FetchResponse>
+
+        /**
          * Show a toast notification.
          */
         toast: {
