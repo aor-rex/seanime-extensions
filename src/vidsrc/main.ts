@@ -121,12 +121,20 @@ class Provider implements AnimeProvider {
             ? ["movie", "anime"]
             : ["anime", "tv"]
 
-        let items: SimklItem[] = []
+        // Merge results from all applicable endpoints. The SIMKL "anime"
+        // endpoint can return false positives for live-action titles (e.g. "The
+        // Boys"), so we must also consult "tv"/"movie" and pick the best overall
+        // match instead of stopping at the first non-empty result set.
+        const seen = new Set<string>()
+        const items: SimklItem[] = []
         for (const ep of endpoints) {
             const res = await this.simklSearch(ep, query)
-            if (res && res.length > 0) {
-                items = res
-                break
+            if (!res || res.length === 0) continue
+            for (const item of res) {
+                const key = String(item?.ids?.simkl_id ?? item?.ids?.simkl ?? item?.ids?.tmdb ?? "")
+                if (!key || seen.has(key)) continue
+                seen.add(key)
+                items.push(item)
             }
         }
         if (items.length === 0) return []
@@ -165,10 +173,19 @@ class Provider implements AnimeProvider {
         }]
     }
 
-    // Picks the SIMKL item that best matches the AniList media: exact year
-    // first, then exact episode count.
+    // Picks the SIMKL item that best matches the query/media. Candidates are
+    // ranked by title similarity to the query first, then refined by exact year
+    // and episode count when known.
     private pickBest(items: SimklItem[], opts: SearchOptions): SimklItem {
         let ranked = [...items]
+        const q = String(opts.query || "").trim().toLowerCase()
+        if (q) {
+            ranked.sort((a, b) => {
+                const ta = String(a.title_en || a.title || "").toLowerCase()
+                const tb = String(b.title_en || b.title || "").toLowerCase()
+                return this.levenshtein(ta, q) - this.levenshtein(tb, q)
+            })
+        }
         const year = opts.year
         if (year) {
             const byYear = ranked.filter((i) => i.year === year)
@@ -180,6 +197,25 @@ class Provider implements AnimeProvider {
             if (byCount.length > 0) ranked = byCount
         }
         return ranked[0]
+    }
+
+    private levenshtein(a: string, b: string): number {
+        const m = a.length
+        const n = b.length
+        if (m === 0) return n
+        if (n === 0) return m
+        const dp = new Array<number>(n + 1)
+        for (let j = 0; j <= n; j++) dp[j] = j
+        for (let i = 1; i <= m; i++) {
+            let prev = dp[0]
+            dp[0] = i
+            for (let j = 1; j <= n; j++) {
+                const cur = dp[j]
+                dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1))
+                prev = cur
+            }
+        }
+        return dp[n]
     }
 
     private isMovieItem(item: SimklItem): boolean {
