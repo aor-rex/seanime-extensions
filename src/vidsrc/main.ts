@@ -395,7 +395,7 @@ class Provider implements AnimeProvider {
     private async vidsrcRequestFull(type: "tv" | "movie", tmdb: string, s: number, e: number): Promise<VidsrcResponse | null> {
         const params = type === "movie"
             ? `type=movie&tmdb=${tmdb}&stream_urls=1`
-            : `type=tv&tmdb=${tmdb}&s=${s}&e=${e}&stream_urls=1`
+            : `type=tv&tmdb=${tmdb}&season=${s}&episode=${e}&stream_urls=1`
         try {
             const res = await fetch(`${VIDSRC_API}?${params}`)
             if (!res.ok) return null
