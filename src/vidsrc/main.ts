@@ -311,7 +311,11 @@ class Provider implements AnimeProvider {
 
         return {
             server: "vidsrc",
-            headers: {},
+            // Non-empty headers route playback through seanime's /api/v1/proxy
+            // (which fetches upstream server-side). The vidsrc segment CDN
+            // rejects requests carrying an Origin or Referer header, so direct
+            // browser playback fails with 403; proxying avoids both.
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36" },
             videoSources: [{
                 url: finalUrl,
                 type: "m3u8",
