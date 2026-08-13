@@ -33,10 +33,17 @@ interface VidsrcData {
 interface VidsrcResponse {
     status_code?: string
     data?: VidsrcData
+    default_subs?: VidsrcSubtitle[]
     vs?: {
         w?: number
         wasm_url?: string
     }
+}
+
+interface VidsrcSubtitle {
+    lang?: string
+    code?: string
+    url?: string
 }
 
 class Provider implements AnimeProvider {
@@ -309,6 +316,11 @@ class Provider implements AnimeProvider {
         const token = await this.fetchToken(master)
         const finalUrl = token ? `${master}?token=${encodeURIComponent(token)}` : master
 
+        // The API returns subtitle tracks (top-level "default_subs") as SRT
+        // files. Ship them as provider subtitle tracks; the player converts
+        // SRT to ASS and proxies the URLs alongside the stream.
+        const subtitles = this.mapSubtitles(full)
+
         return {
             server: "vidsrc",
             // Non-empty headers route playback through seanime's /api/v1/proxy
@@ -320,9 +332,27 @@ class Provider implements AnimeProvider {
                 url: finalUrl,
                 type: "m3u8",
                 quality: "auto",
-                subtitles: [],
+                subtitles,
             }],
         }
+    }
+
+    private mapSubtitles(full: VidsrcResponse | null): VideoSubtitle[] {
+        const subs = full?.default_subs
+        if (!subs || subs.length === 0) return []
+        const out: VideoSubtitle[] = []
+        for (let i = 0; i < subs.length; i++) {
+            const s = subs[i]
+            const url = this.str(s?.url)
+            if (!url) continue
+            out.push({
+                id: `sub-${i}`,
+                url,
+                language: this.str(s?.lang),
+                isDefault: i === 0,
+            })
+        }
+        return out
     }
 
     private metaFromEpisode(episode: EpisodeDetails): { type: "tv" | "movie"; tmdb: string; season: number; epNum: number } | null {
