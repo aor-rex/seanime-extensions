@@ -1,0 +1,39 @@
+{
+  "id": "webtor-downloader",
+  "name": "Webtor.io Downloader",
+  "version": "0.1.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/webtor-downloader/manifest.json",
+  "language": "typescript",
+  "type": "plugin",
+  "description": "Download torrents via Webtor.io (cloud torrent client) directly to your library. Toggle ON to capture torrent searches and add 'Download via Webtor.io' actions in tray.",
+  "author": "aor-rex",
+  "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/webtor-downloader/icon.png",
+  "website": "https://github.com/aor-rex/seanime-extensions",
+  "lang": "en",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/webtor-downloader/main.ts",
+  "userConfig": {
+    "requiresConfig": true,
+    "version": 1,
+    "fields": [
+      {
+        "name": "download-dir",
+        "label": "Download directory (empty = Downloads folder)",
+        "type": "text",
+        "default": ""
+      }
+    ]
+  },
+  "plugin": {
+    "version": "1",
+    "permissions": {
+      "scopes": ["system", "storage"],
+      "allow": {
+        "networkAccess": {
+          "allowedDomains": ["webtor.io", "api.webtor.io"]
+        },
+        "readPaths": ["$DOWNLOAD/**", "$SEANIME_ANIME_LIBRARY/**"],
+        "writePaths": ["$DOWNLOAD/**", "$SEANIME_ANIME_LIBRARY/**"]
+      }
+    }
+  }
+}
