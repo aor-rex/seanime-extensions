@@ -1,7 +1,7 @@
 {
   "id": "webtor-downloader",
   "name": "Webtor.io Downloader",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/webtor-downloader/manifest.json",
   "language": "typescript",
   "type": "plugin",
