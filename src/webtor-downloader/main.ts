@@ -22,18 +22,9 @@ function init() {
 		const WEBTOR_API = "https://api.webtor.io/v1";
 
 		// ------------------------------------------------------------------
-		// Config
+		// Types
 		// ------------------------------------------------------------------
-		function downloadDir(): string {
-			const pref = ($getUserPreference("download-dir") || "").trim();
-			return pref.length > 0 ? pref : $osExtra.downloadDir();
-		}
-
-		// ------------------------------------------------------------------
-		// State
-		// ------------------------------------------------------------------
-		const enabled = ctx.state<boolean>(false);
-		const recentTorrents = ctx.state<Array<{
+		interface TorrentItem {
 			infoHash: string;
 			name: string;
 			size: number;
@@ -48,8 +39,9 @@ function init() {
 			mediaTitle: string;
 			mediaId: number;
 			capturedAt: number;
-		}>>([]);
-		const downloads = ctx.state<Array<{
+		}
+
+		interface DownloadEntry {
 			id: string;
 			label: string;
 			dest: string;
@@ -57,7 +49,22 @@ function init() {
 			pct: number;
 			speed: number;
 			error?: string;
-		}>>([]);
+		}
+
+		// ------------------------------------------------------------------
+		// Config
+		// ------------------------------------------------------------------
+		function downloadDir(): string {
+			const pref = ($getUserPreference("download-dir") || "").trim();
+			return pref.length > 0 ? pref : $osExtra.downloadDir();
+		}
+
+		// ------------------------------------------------------------------
+		// State
+		// ------------------------------------------------------------------
+		const enabled = ctx.state<boolean>(false);
+		const recentTorrents = ctx.state<TorrentItem[]>([]);
+		const downloads = ctx.state<DownloadEntry[]>([]);
 		const status = ctx.state<string>("");
 		const manualInput = ctx.fieldRef<string>("");
 		const searching = ctx.state<boolean>(false);
@@ -80,7 +87,7 @@ function init() {
 			return n >= 1024 ? `${(n / 1024).toFixed(1)} KB/s` : `${Math.round(n)} B/s`;
 		}
 
-		function updateDownload(id: string, patch: Partial<typeof downloads.get()[0]>): void {
+		function updateDownload(id: string, patch: Partial<DownloadEntry>): void {
 			downloads.set((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
 			tray.update();
 		}
@@ -219,7 +226,7 @@ function init() {
 		// ------------------------------------------------------------------
 		// Download Flow
 		// ------------------------------------------------------------------
-		async function startDownload(torrent: typeof recentTorrents.get()[0]): Promise<void> {
+		async function startDownload(torrent: TorrentItem): Promise<void> {
 			if (!torrent.magnetLink) {
 				pushStatus("No magnet link available");
 				return;
@@ -350,7 +357,7 @@ await registerLocalFile(destPath, target.name, torrent.mediaId, torrent.episodeN
 			minHeight: "22rem",
 		});
 
-		function torrentItem(t: typeof recentTorrents.get()[0]): any[] {
+		function torrentItem(t: TorrentItem): any[] {
 			const epLabel = t.episodeNumber > 0 ? `E${t.episodeNumber}` : (t.isBatch ? "Batch" : "");
 			const resLabel = t.resolution ? ` · ${t.resolution}` : "";
 			const sizeLabel = t.formattedSize ? ` · ${t.formattedSize}` : "";
@@ -373,7 +380,7 @@ await registerLocalFile(destPath, target.name, torrent.mediaId, torrent.episodeN
 			];
 		}
 
-		function downloadItem(d: typeof downloads.get()[0]): any[] {
+		function downloadItem(d: DownloadEntry): any[] {
 			const pct = d.pct > 0 ? `${Math.round(d.pct)}%` : "—";
 			const statusLabel = d.status === "completed" ? "Done" : d.status === "error" ? (d.error || "Failed") : `${pct} · ${formatSpeed(d.speed)}`;
 			const badgeIntent = d.status === "completed" ? "success" : d.status === "error" ? "alert" : "info";
