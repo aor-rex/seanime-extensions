@@ -411,7 +411,7 @@ class Provider {
         const torrents = await this.scrape(q, this.categoryFor(opts.media))
         const filtered = torrents
             .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
-        await this.resolveInfoHashes(filtered, 15)
+        await this.resolveInfoHashes(filtered, 30)
         return filtered
     }
 
@@ -460,7 +460,7 @@ class Provider {
             const batches = torrents
                 .filter((t) => t.isBatch && this.belongsTo(t.name, aliases, false, season, mediaYear))
             if (batches.length > 0) {
-                await this.resolveInfoHashes(batches, 15)
+                await this.resolveInfoHashes(batches, 30)
                 return batches
             }
             // No batches found: continue into single-episode search.
@@ -488,7 +488,7 @@ class Provider {
                     this.belongsTo(t.name, aliases, isMovie, season, mediaYear) && keep(t),
                 )
             }
-            await this.resolveInfoHashes(filtered, 15)
+            await this.resolveInfoHashes(filtered, 30)
             return filtered
         }
 
@@ -500,7 +500,7 @@ class Provider {
         }
         const filtered = torrents
             .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
-        await this.resolveInfoHashes(filtered, 15)
+        await this.resolveInfoHashes(filtered, 30)
         return filtered
     }
 
@@ -585,7 +585,7 @@ class Provider {
     private infoHashFromMagnet(magnet: string): string {
         if (!magnet.startsWith("magnet:")) return ""
         const m = magnet.match(/btih:([a-fA-F0-9]{40})/)
-        return m ? m[1] : ""
+        return m ? m[1].toLowerCase() : ""
     }
 
     // Resolves info hashes for the given torrents using a single shared session,
@@ -606,9 +606,13 @@ class Provider {
                 const t = targets[idx]
                 if (!t) continue
                 if (t.infoHash) continue
-                const magnet = await this.magnetForTorrent(t, session)
-                const hash = this.infoHashFromMagnet(magnet)
-                if (hash) t.infoHash = hash
+                // Retry a couple of times before giving up so transient
+                // token/session failures don't drop the cached-status badge.
+                for (let attempt = 0; attempt < 2 && !t.infoHash; attempt++) {
+                    const magnet = await this.magnetForTorrent(t, session)
+                    const hash = this.infoHashFromMagnet(magnet)
+                    if (hash) t.infoHash = hash
+                }
             }
         }
         const workers = Math.min(5, targets.length)

@@ -219,7 +219,7 @@ class Provider {
     }
 
     private toAnimeTorrent(t: TpbTorrent, confirmed = true): AnimeTorrent {
-        const infoHash = t.info_hash || null
+        const infoHash = (t.info_hash || "").toLowerCase() || null
         return {
             name: t.name,
             date: new Date(Number(t.added) * 1000).toISOString(),
