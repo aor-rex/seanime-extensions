@@ -158,12 +158,17 @@ class Provider {
         return m ? Number(m[1]) : 0
     }
 
-    // True when the torrent name matches the requested (relative) episode number
-    // for the given season. A torrent with an explicit season marker must match
-    // that season; torrents without one (absolute numbering, etc.) only need to
-    // match the episode number.
-    private matchesEpisode(name: string, episodeNumber: number, season: number): boolean {
-        if (this.episodeOf(name) !== episodeNumber) return false
+    // True when the torrent name matches the requested episode number for the
+    // given season. The requested number may be an absolute episode number
+    // (continuous numbering across seasons), in which case the seasonal offset
+    // is subtracted before comparing against the SxxEyy marker. A torrent with
+    // an explicit season marker must match that season; torrents without one
+    // (absolute numbering, etc.) only need to match the episode number.
+    private matchesEpisode(name: string, episodeNumber: number, season: number, offset: number): boolean {
+        const ep = this.episodeOf(name)
+        if (ep !== episodeNumber) {
+            if (!(offset > 0 && episodeNumber > offset && ep === episodeNumber - offset)) return false
+        }
         if (season <= 0) return true
         const s = this.seasonOf(name)
         return s === 0 || s === season
@@ -404,8 +409,10 @@ class Provider {
         const mediaYear = opts.media.seasonYear || opts.media.startDate?.year || 0
         const season = split.season
         const torrents = await this.scrape(q, this.categoryFor(opts.media))
-        return torrents
+        const filtered = torrents
             .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
+        await this.resolveInfoHashes(filtered, 15)
+        return filtered
     }
 
     async smartSearch(opts: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
@@ -415,6 +422,7 @@ class Provider {
         const isMovie = this.isMovie(opts.media)
         const mediaYear = opts.media.seasonYear || opts.media.startDate?.year || 0
         const aliases = this.buildAliasTokens(opts.query, opts.media.englishTitle, opts.media.romajiTitle, ...(opts.media.synonyms ?? []))
+        const offset = opts.media.absoluteSeasonOffset || 0
         let q = base
 
         if (isMovie) {
@@ -431,43 +439,69 @@ class Provider {
 
         const query = async (searchQuery: string) => this.scrape(searchQuery, this.categoryFor(opts.media))
 
-        let torrents = await query(q)
+        // Title-only fallback query (optionally constrained by resolution), used
+        // whenever the precise query comes back empty or is fully filtered out.
+        const fallback = async (): Promise<AnimeTorrent[]> => {
+            let fb = base
+            if (opts.resolution) fb += ` ${opts.resolution}`
+            return query(fb)
+        }
 
         // Batch search: extto.com often doesn't index the literal word "complete"
         // in batch torrent titles, so the precise query can come back empty. Fall
         // back to a title-only query and keep anything that looks like a batch.
+        // If the provider has no batch torrents for this media, fall through to
+        // the single-episode search below so the user never sees an empty set.
         if (!isMovie && opts.batch) {
+            let torrents = await query(q)
             if (torrents.length === 0) {
-                let fb = base
-                if (opts.resolution) fb += ` ${opts.resolution}`
-                torrents = (await query(fb)).filter((t) => t.isBatch)
+                torrents = (await fallback()).filter((t) => t.isBatch)
             }
-            return torrents
+            const batches = torrents
                 .filter((t) => t.isBatch && this.belongsTo(t.name, aliases, false, season, mediaYear))
+            if (batches.length > 0) {
+                await this.resolveInfoHashes(batches, 15)
+                return batches
+            }
+            // No batches found: continue into single-episode search.
         }
 
         // Single-episode search: the query "SxxEyy" suffix rarely matches real
-        // torrent names (season offsets, absolute episode numbers, etc.). Fall
-        // back to a title-only query and keep batches + torrents that parse to
-        // the requested season/episode. Movies always arrive with episodeNumber=1
-        // from the frontend, so skip this branch entirely for them.
+        // torrent names (season offsets, absolute episode numbers, etc.).
+        // Whenever the final filtered set is empty - either because the precise
+        // query returned nothing or because every result was filtered out -
+        // retry with a title-only query and keep batches + torrents that parse
+        // to the requested season/episode. Movies always arrive with
+        // episodeNumber=1 from the frontend, so skip this branch entirely for
+        // them.
         if (!isMovie && opts.episodeNumber > 0) {
-            if (torrents.length === 0) {
-                let fb = base
-                if (opts.resolution) fb += ` ${opts.resolution}`
-                torrents = (await query(fb)).filter(
-                    (t) => t.isBatch || this.matchesEpisode(t.name, opts.episodeNumber, season),
+            const keep = (t: AnimeTorrent) =>
+                t.isBatch || this.matchesEpisode(t.name, opts.episodeNumber, season, offset)
+
+            let torrents = opts.batch ? await fallback() : await query(q)
+            let filtered = torrents.filter((t) =>
+                this.belongsTo(t.name, aliases, isMovie, season, mediaYear) && keep(t),
+            )
+            if (filtered.length === 0) {
+                torrents = await fallback()
+                filtered = torrents.filter((t) =>
+                    this.belongsTo(t.name, aliases, isMovie, season, mediaYear) && keep(t),
                 )
             }
-            return torrents
-                .filter((t) =>
-                    this.belongsTo(t.name, aliases, isMovie, season, mediaYear)
-                    && (t.isBatch || this.matchesEpisode(t.name, opts.episodeNumber, season)),
-                )
+            await this.resolveInfoHashes(filtered, 15)
+            return filtered
         }
 
-        return torrents
+        // Generic path: plain (movie / no-episode) search, possibly following a
+        // batch-mode fallthrough with no episode number.
+        let torrents = await query(q)
+        if (torrents.length === 0) {
+            torrents = await fallback()
+        }
+        const filtered = torrents
             .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
+        await this.resolveInfoHashes(filtered, 15)
+        return filtered
     }
 
     // EXT's magnet links are signed per-request. We scrape the torrent detail
@@ -482,12 +516,35 @@ class Provider {
             // The magnet endpoint only accepts sessions established from the
             // homepage. Fetch it first to get a valid PHPSESSID cookie, then
             // reuse it for the detail page and the magnet request.
+            const session = await this.initSession()
+            if (!session) return ""
+            return this.magnetForTorrent(torrent, session)
+        } catch (err) {
+            return ""
+        }
+    }
+
+    // Fetches the homepage to establish a valid PHPSESSID cookie, returning the
+    // cookie value (or "" on failure). The session is shared by all requests in
+    // a single search so we don't have to re-init it per torrent.
+    private async initSession(): Promise<string> {
+        try {
             const sessRes = await fetch(`${this.api}/`, {
                 headers: { Referer: `${this.api}/` },
             })
             if (!sessRes.ok) return ""
-            const session = sessRes.cookies?.PHPSESSID || ""
-            if (!session) return ""
+            return sessRes.cookies?.PHPSESSID || ""
+        } catch (err) {
+            return ""
+        }
+    }
+
+    // Resolves the signed magnet link for a single torrent using an already
+    // established session cookie. Returns the magnet string, or "" on failure.
+    private async magnetForTorrent(torrent: AnimeTorrent, session: string): Promise<string> {
+        try {
+            const id = this.idFromHref(torrent.link)
+            if (!id || !session) return ""
 
             const res = await fetch(torrent.link, {
                 headers: { Referer: `${this.api}/`, Cookie: `PHPSESSID=${session}` },
@@ -522,6 +579,42 @@ class Provider {
         } catch (err) {
             return ""
         }
+    }
+
+    // Extracts the info hash from a magnet string, or returns "".
+    private infoHashFromMagnet(magnet: string): string {
+        if (!magnet.startsWith("magnet:")) return ""
+        const m = magnet.match(/btih:([a-fA-F0-9]{40})/)
+        return m ? m[1] : ""
+    }
+
+    // Resolves info hashes for the given torrents using a single shared session,
+    // limited to `limit` torrents (the most relevant ones). Runs concurrently
+    // with a small concurrency cap so cached-status badges appear on search
+    // results without hammering the provider.
+    private async resolveInfoHashes(torrents: AnimeTorrent[], limit: number): Promise<void> {
+        if (!torrents || torrents.length === 0) return
+        const targets = torrents.slice(0, limit)
+        const session = await this.initSession()
+        if (!session) return
+
+        let cursor = 0
+        const worker = async () => {
+            while (true) {
+                const idx = cursor++
+                if (idx >= targets.length) return
+                const t = targets[idx]
+                if (!t) continue
+                if (t.infoHash) continue
+                const magnet = await this.magnetForTorrent(t, session)
+                const hash = this.infoHashFromMagnet(magnet)
+                if (hash) t.infoHash = hash
+            }
+        }
+        const workers = Math.min(5, targets.length)
+        const jobs: Array<Promise<void>> = []
+        for (let i = 0; i < workers; i++) jobs.push(worker())
+        await Promise.all(jobs)
     }
 
     // EXT doesn't expose info hashes without a magnet request.
