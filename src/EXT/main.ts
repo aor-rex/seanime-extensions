@@ -411,7 +411,6 @@ class Provider {
         const torrents = await this.scrape(q, this.categoryFor(opts.media))
         const filtered = torrents
             .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
-        await this.resolveInfoHashes(filtered)
         return filtered
     }
 
@@ -460,7 +459,6 @@ class Provider {
             const batches = torrents
                 .filter((t) => t.isBatch && this.belongsTo(t.name, aliases, false, season, mediaYear))
             if (batches.length > 0) {
-                await this.resolveInfoHashes(batches)
                 return batches
             }
             // No batches found: continue into single-episode search.
@@ -488,7 +486,6 @@ class Provider {
                     this.belongsTo(t.name, aliases, isMovie, season, mediaYear) && keep(t),
                 )
             }
-            await this.resolveInfoHashes(filtered)
             return filtered
         }
 
@@ -500,7 +497,6 @@ class Provider {
         }
         const filtered = torrents
             .filter((t) => this.belongsTo(t.name, aliases, isMovie, season, mediaYear))
-        await this.resolveInfoHashes(filtered)
         return filtered
     }
 
@@ -579,46 +575,6 @@ class Provider {
         } catch (err) {
             return ""
         }
-    }
-
-    // Extracts the info hash from a magnet string, or returns "".
-    private infoHashFromMagnet(magnet: string): string {
-        if (!magnet.startsWith("magnet:")) return ""
-        const m = magnet.match(/btih:([a-fA-F0-9]{40})/)
-        return m ? m[1].toLowerCase() : ""
-    }
-
-    // Resolves info hashes for the given torrents using a single shared session.
-    // Sorts the most-seeded releases first and resolves every torrent so cached
-    // status badges appear on search results without hammering the provider.
-    // Runs concurrently with a small concurrency cap.
-    private async resolveInfoHashes(torrents: AnimeTorrent[]): Promise<void> {
-        if (!torrents || torrents.length === 0) return
-        torrents.sort((a, b) => b.seeders - a.seeders)
-        const session = await this.initSession()
-        if (!session) return
-
-        let cursor = 0
-        const worker = async () => {
-            while (true) {
-                const idx = cursor++
-                if (idx >= torrents.length) return
-                const t = torrents[idx]
-                if (!t) continue
-                if (t.infoHash) continue
-                // Retry a couple of times before giving up so transient
-                // token/session failures don't drop the cached-status badge.
-                for (let attempt = 0; attempt < 2 && !t.infoHash; attempt++) {
-                    const magnet = await this.magnetForTorrent(t, session)
-                    const hash = this.infoHashFromMagnet(magnet)
-                    if (hash) t.infoHash = hash
-                }
-            }
-        }
-        const workers = Math.min(5, torrents.length)
-        const jobs: Array<Promise<void>> = []
-        for (let i = 0; i < workers; i++) jobs.push(worker())
-        await Promise.all(jobs)
     }
 
     // EXT doesn't expose info hashes without a magnet request.
