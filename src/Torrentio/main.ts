@@ -212,7 +212,7 @@ async function tmdbToImdb(tmdbId: number, isMovie: boolean): Promise<string> {
         const res = await fetch(
             WIKIDATA_SPARQL + "?query=" + encodeURIComponent(query) + "&format=json",
             {
-                timeout: 15,
+                timeout: 5,
                 headers: { Accept: "application/sparql-results+json", "User-Agent": "seanime-torrentio/0.1.9" },
             }
         )
@@ -230,11 +230,14 @@ async function tmdbToImdb(tmdbId: number, isMovie: boolean): Promise<string> {
     }
 }
 
-class Provider {
-    private cache: { [anilistId: number]: ResolvedIds } = {}
-    // infoHash + config segment -> estimated total size in bytes
-    private batchSizeCache: { [key: string]: number } = {}
+// Seanime runs "new Provider()" on every search/smartSearch call
+// (extension_repo/goja_base.go callClassMethod), so instance-level caches are
+// wiped between calls. The VM itself persists, so module-scope caches survive.
+const idCache: { [anilistId: number]: ResolvedIds } = {}
+// infoHash + config segment -> estimated total size in bytes
+const batchSizeCache: { [key: string]: number } = {}
 
+class Provider {
     getSettings(): AnimeProviderSettings {
         return {
             type: "special",
@@ -270,59 +273,59 @@ class Provider {
     }
 
     private async resolveIds(media: Media): Promise<ResolvedIds> {
-        if (this.cache[media.id]) return this.cache[media.id]
+        if (idCache[media.id]) return idCache[media.id]
+        if (!media.id) return {}
         let resolved: ResolvedIds = {}
 
-        // ARM and YUNA are independent and both keyed on the AniList id, so
-        // query them in parallel. Prefer ARM (it also returns imdb/mal).
-        const armPromise = (async () => {
-            try {
-                const res = await fetch(ARM_API + "?source=anilist&id=" + media.id, { timeout: 15 })
-                if (res.ok) {
-                    const d = res.json<any>()
-                    if (d) {
-                        return {
-                            kitsuId: d.kitsu || undefined,
-                            imdbId: d.imdb || undefined,
-                            malId: d.myanimelist || undefined,
+        // TMDB custom-source media: the ID is a synthetic runtime ID that
+        // ARM/YUNA (AniList-keyed) can never resolve. Decode it and map the
+        // TMDB ID to IMDb directly, skipping ARM/YUNA entirely.
+        const decoded = decodeTmdbId(unwrapRuntimeId(media.id))
+        if (decoded) {
+            const imdb = await this.tmdbIdToImdb(decoded.tmdbId, decoded.isMovie)
+            if (imdb) {
+                resolved.imdbId = imdb
+                if (!decoded.isMovie) resolved.tmdbSeason = decoded.season || 1
+            }
+        } else {
+            // ARM and YUNA are independent and both keyed on the AniList id, so
+            // query them in parallel. Prefer ARM (it also returns imdb/mal).
+            const armPromise = (async () => {
+                try {
+                    const res = await fetch(ARM_API + "?source=anilist&id=" + media.id, { timeout: 5 })
+                    if (res.ok) {
+                        const d = res.json<any>()
+                        if (d) {
+                            return {
+                                kitsuId: d.kitsu || undefined,
+                                imdbId: d.imdb || undefined,
+                                malId: d.myanimelist || undefined,
+                            }
                         }
                     }
+                } catch (e) {
+                    console.error("Torrentio: ARM lookup failed: " + errMsg(e))
                 }
-            } catch (e) {
-                console.error("Torrentio: ARM lookup failed: " + errMsg(e))
-            }
-            return null
-        })()
+                return null
+            })()
 
-        const yunaPromise = (async () => {
-            try {
-                const res = await fetch(YUNA_API + "?source=anilist&id=" + media.id, { timeout: 15 })
-                if (res.ok) {
-                    const d = res.json<any>()
-                    if (d && d.kitsu) return { kitsuId: d.kitsu as number }
+            const yunaPromise = (async () => {
+                try {
+                    const res = await fetch(YUNA_API + "?source=anilist&id=" + media.id, { timeout: 5 })
+                    if (res.ok) {
+                        const d = res.json<any>()
+                        if (d && d.kitsu) return { kitsuId: d.kitsu as number }
+                    }
+                } catch (e) {
+                    console.error("Torrentio: yuna lookup failed: " + errMsg(e))
                 }
-            } catch (e) {
-                console.error("Torrentio: yuna lookup failed: " + errMsg(e))
-            }
-            return null
-        })()
+                return null
+            })()
 
-        const [armResolved, yunaResolved] = await Promise.all([armPromise, yunaPromise])
-        if (armResolved) resolved = armResolved
-        if (!resolved.kitsuId && yunaResolved && yunaResolved.kitsuId) {
-            resolved.kitsuId = yunaResolved.kitsuId
-        }
-
-        // Fallback for TMDB custom-source media: ARM/YUNA can't resolve the
-        // synthetic encoded ID, so decode it to a TMDB ID and map to IMDb.
-        if (!resolved.kitsuId && !resolved.imdbId) {
-            const decoded = decodeTmdbId(unwrapRuntimeId(media.id))
-            if (decoded) {
-                const imdb = await tmdbToImdb(decoded.tmdbId, decoded.isMovie)
-                if (imdb) {
-                    resolved.imdbId = imdb
-                    if (!decoded.isMovie) resolved.tmdbSeason = decoded.season
-                }
+            const [armResolved, yunaResolved] = await Promise.all([armPromise, yunaPromise])
+            if (armResolved) resolved = armResolved
+            if (!resolved.kitsuId && yunaResolved && yunaResolved.kitsuId) {
+                resolved.kitsuId = yunaResolved.kitsuId
             }
         }
 
@@ -341,9 +344,32 @@ class Provider {
         }
 
         if (resolved.kitsuId || resolved.imdbId) {
-            this.cache[media.id] = resolved
+            idCache[media.id] = resolved
         }
         return resolved
+    }
+
+    // Map a TMDB ID to an IMDb ID. Prefers TMDB external_ids (one fast call,
+    // needs a key) and falls back to Wikidata (free, keyless).
+    private async tmdbIdToImdb(tmdbId: number, isMovie: boolean): Promise<string> {
+        const key = ($getUserPreference("torrentioTmdbApiKey") || "").trim()
+        if (key) {
+            try {
+                const type = isMovie ? "movie" : "tv"
+                const res = await fetch(
+                    TMDB_API + "/" + type + "/" + tmdbId +
+                    "/external_ids?api_key=" + encodeURIComponent(key),
+                    { timeout: 5 }
+                )
+                if (res.ok) {
+                    const ext = res.json<any>()
+                    if (ext && ext.imdb_id) return ext.imdb_id
+                }
+            } catch (e) {
+                console.error("Torrentio: TMDB external_ids lookup failed: " + errMsg(e))
+            }
+        }
+        return tmdbToImdb(tmdbId, isMovie)
     }
 
     // Title-based TMDB fallback used when ARM/YUNA and the encoded-ID path all
@@ -381,7 +407,7 @@ class Provider {
                 url += "&year=" + media.seasonYear
             }
             try {
-                const res = await fetch(url, { timeout: 15 })
+                const res = await fetch(url, { timeout: 5 })
                 if (!res.ok) continue
                 const data = res.json<any>()
                 const results = (data && Array.isArray(data.results)) ? data.results : []
@@ -412,7 +438,7 @@ class Provider {
                 // Map TMDB id -> IMDb id via external_ids (no Wikidata needed).
                 const extUrl = TMDB_API + "/" + type + "/" + best.id +
                     "/external_ids?api_key=" + encodeURIComponent(key)
-                const extRes = await fetch(extUrl, { timeout: 15 })
+                const extRes = await fetch(extUrl, { timeout: 5 })
                 if (!extRes.ok) continue
                 const ext = extRes.json<any>()
                 if (!ext || !ext.imdb_id) continue
@@ -426,7 +452,7 @@ class Provider {
                     try {
                         const detUrl = TMDB_API + "/tv/" + best.id +
                             "?api_key=" + encodeURIComponent(key) + "&language=en-US"
-                        const detRes = await fetch(detUrl, { timeout: 15 })
+                        const detRes = await fetch(detUrl, { timeout: 5 })
                         if (detRes.ok) {
                             const det = detRes.json<any>()
                             const seasons = det && Array.isArray(det.seasons) ? det.seasons : []
@@ -540,15 +566,21 @@ class Provider {
         const movieOrSingle = this.isMovieOrSingle(media)
         if (ids.kitsuId) {
             if (movieOrSingle) {
-                const streams = await this.fetchStreams(this.movieUrl(ids.kitsuId))
-                return streams.length > 0 ? streams : this.fetchStreams(this.seriesUrl(ids.kitsuId, 1))
+                const [movie, series] = await Promise.all([
+                    this.fetchStreams(this.movieUrl(ids.kitsuId)),
+                    this.fetchStreams(this.seriesUrl(ids.kitsuId, 1)),
+                ])
+                return movie.length > 0 ? movie : series
             }
             return this.fetchStreams(this.seriesUrl(ids.kitsuId, ep))
         }
         if (ids.imdbId) {
             if (movieOrSingle) {
-                const streams = await this.fetchStreams(this.imdbMovieUrl(ids.imdbId))
-                return streams.length > 0 ? streams : this.fetchStreams(this.imdbSeriesUrl(ids.imdbId, 1, 1))
+                const [movie, series] = await Promise.all([
+                    this.fetchStreams(this.imdbMovieUrl(ids.imdbId)),
+                    this.fetchStreams(this.imdbSeriesUrl(ids.imdbId, 1, 1)),
+                ])
+                return movie.length > 0 ? movie : series
             }
             const season = (ids.tmdbSeason && ids.tmdbSeason > 0) ? ids.tmdbSeason : 1
             return this.fetchStreams(this.imdbSeriesUrl(ids.imdbId, season, ep))
@@ -584,7 +616,7 @@ class Provider {
         }
         const hashes = Object.keys(nfo)
         const uncached: string[] = hashes.filter(
-            h => !(this.batchSizeCache[cfg + "|" + h]) && !(this.batchSizeCache[cfg + "|" + h + "#true"])
+            h => !(batchSizeCache[cfg + "|" + h]) && !(batchSizeCache[cfg + "|" + h + "#true"])
         )
 
         if (uncached.length > 0) {
@@ -681,7 +713,7 @@ class Provider {
                 for (const k in set) total += set[k]
                 if (total > 0) {
                     const key = trueTotals.has(h) ? cfg + "|" + h + "#true" : cfg + "|" + h
-                    this.batchSizeCache[key] = total
+                    batchSizeCache[key] = total
                 }
             }
         }
@@ -689,13 +721,13 @@ class Provider {
         // Apply estimates
         for (const h of hashes) {
             const t = nfo[h]
-            const trueTotal = this.batchSizeCache[cfg + "|" + h + "#true"]
+            const trueTotal = batchSizeCache[cfg + "|" + h + "#true"]
             if (trueTotal) {
                 t.size = trueTotal
                 t.formattedSize = formatSizeBytes(trueTotal)
                 continue
             }
-            const searchedSeasonTotal = this.batchSizeCache[cfg + "|" + h]
+            const searchedSeasonTotal = batchSizeCache[cfg + "|" + h]
             if (!searchedSeasonTotal) continue
             const range = parseSeasonRange(t.name)
             if (range && range.end > range.start) {
