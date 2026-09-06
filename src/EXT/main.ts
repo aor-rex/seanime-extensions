@@ -379,10 +379,21 @@ class Provider {
         return { size, seeders, leechers, date }
     }
 
-    // Cloudflare bypass: user pastes either a bare cf_clearance value or a
-    // full Cookie header copied from DevTools. The clearance is UA-bound, so
-    // the solving browser's exact User-Agent must be sent verbatim too.
+    // Cloudflare bypass: accepts a bare cf_clearance value, a full Cookie
+    // header from DevTools, or a JSON-style paste from the Request Cookies
+    // viewer (e.g. cf_clearance:"<token>" or {"cf_clearance":"<token>"}).
+    // The clearance is UA-bound, so the solving browser's exact User-Agent
+    // must be sent verbatim too (see customUa()).
     // Returns the CF cookie pairs (PHPSESSID excluded, the live one is used).
+    private cleanCookieValue(v: string): string {
+        let s = v.trim()
+        // Strip surrounding quotes/braces left over from JSON-style pastes.
+        s = s.replace(/^[{"]+/, "").replace(/[}"]+$/, "").trim()
+        const q = s.match(/^"(.*)"$/)
+        if (q) s = q[1].trim()
+        return s
+    }
+
     private cfCookies(): string {
         let raw = ""
         try {
@@ -391,9 +402,23 @@ class Provider {
             raw = ""
         }
         if (!raw) return ""
+        // Strip a wrapping JSON object so pastes like
+        // {"cf_clearance":"<token>","__dark-mode":"1"} parse as pairs.
+        const unwrapped = raw.replace(/^\{+/, "").replace(/\}+$/, "").trim()
+        if (unwrapped !== raw) raw = unwrapped
+        // JSON-style paste from the Request Cookies viewer uses a colon
+        // (cf_clearance:"<token>", "cf_clearance":"<token>"). Extract just
+        // the token; a full Cookie header (with "=") is handled below so
+        // companion cookies are preserved.
+        const colonStyle = raw.match(/["']?cf_clearance["']?\s*:\s*"?([^";\s}]+)/i)
+        if (colonStyle && colonStyle[1]) {
+            const token = this.cleanCookieValue(colonStyle[1])
+            if (token) return `cf_clearance=${token}`
+        }
         if (raw.indexOf("=") === -1) {
-            // Bare value -> treat as cf_clearance.
-            return raw ? `cf_clearance=${raw}` : ""
+            // Bare value (possibly quoted) -> treat as cf_clearance.
+            const token = this.cleanCookieValue(raw.replace(/^cf_clearance\s*:\s*/i, ""))
+            return token ? `cf_clearance=${token}` : ""
         }
         const pairs = raw.split(";")
         const kept: string[] = []
@@ -402,10 +427,11 @@ class Provider {
             if (!t) continue
             const eq = t.indexOf("=")
             if (eq === -1) continue
-            const name = t.slice(0, eq).trim()
-            if (!name) continue
+            const name = this.cleanCookieValue(t.slice(0, eq)).replace(/[^a-zA-Z0-9_-]/g, "")
+            const value = this.cleanCookieValue(t.slice(eq + 1))
+            if (!name || !value) continue
             if (name.toLowerCase() === "phpsessid") continue
-            kept.push(`${name}=${t.slice(eq + 1).trim()}`)
+            kept.push(`${name}=${value}`)
         }
         return kept.join("; ")
     }
