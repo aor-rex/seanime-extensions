@@ -154,10 +154,17 @@ class Provider {
             : `/category-search/${encodeURIComponent(query)}/${category}/1/`
         try {
             const res = await fetch(`${this.api}${path}`, {
-                headers: { Referer: `${this.api}/` },
+                headers: this.buildHeaders(`${this.api}/`),
             })
-            if (!res.ok) return []
+            if (!res.ok) {
+                if (res.status === 403) console.error("1337x: Cloudflare challenge blocked the request (403) — update the cf-cookie/user-agent settings with fresh values")
+                return []
+            }
             const html = res.text()
+            if (this.isCfBlock(res.status, html)) {
+                console.error("1337x: Cloudflare challenge page received — update the cf-cookie/user-agent settings with fresh values")
+                return []
+            }
             const $ = LoadDoc(html)
             const ret: AnimeTorrent[] = []
             $("table tbody tr").each((_, el) => {
@@ -198,13 +205,98 @@ class Provider {
         return this.scrape(q, category)
     }
 
+    // Cloudflare bypass: accepts a bare cf_clearance value, a full Cookie
+    // header from DevTools, or a JSON-style paste from the Request Cookies
+    // viewer (e.g. cf_clearance:"<token>" or {"cf_clearance":"<token>"}).
+    // The clearance is UA-bound, so the solving browser's exact User-Agent
+    // must be sent verbatim too (see customUa()).
+    private cleanCookieValue(v: string): string {
+        let s = v.trim()
+        // Strip surrounding quotes/braces left over from JSON-style pastes.
+        s = s.replace(/^[{"]+/, "").replace(/[}"]+$/, "").trim()
+        const q = s.match(/^"(.*)"$/)
+        if (q) s = q[1].trim()
+        return s
+    }
+
+    private cfCookies(): string {
+        let raw = ""
+        try {
+            raw = ($getUserPreference("cf-cookie") || "").trim()
+        } catch (err) {
+            raw = ""
+        }
+        if (!raw) return ""
+        // Strip a wrapping JSON object so pastes like
+        // {"cf_clearance":"<token>","__dark-mode":"1"} parse as pairs.
+        const unwrapped = raw.replace(/^\{+/, "").replace(/\}+$/, "").trim()
+        if (unwrapped !== raw) raw = unwrapped
+        // JSON-style paste from the Request Cookies viewer uses a colon
+        // (cf_clearance:"<token>", "cf_clearance":"<token>"). Extract just
+        // the token; a full Cookie header (with "=") is handled below so
+        // companion cookies are preserved.
+        const colonStyle = raw.match(/["']?cf_clearance["']?\s*:\s*"?([^";\s}]+)/i)
+        if (colonStyle && colonStyle[1]) {
+            const token = this.cleanCookieValue(colonStyle[1])
+            if (token) return `cf_clearance=${token}`
+        }
+        if (raw.indexOf("=") === -1) {
+            // Bare value (possibly quoted) -> treat as cf_clearance.
+            const token = this.cleanCookieValue(raw.replace(/^cf_clearance\s*:\s*/i, ""))
+            return token ? `cf_clearance=${token}` : ""
+        }
+        const pairs = raw.split(";")
+        const kept: string[] = []
+        for (const p of pairs) {
+            const t = p.trim()
+            if (!t) continue
+            const eq = t.indexOf("=")
+            if (eq === -1) continue
+            const name = this.cleanCookieValue(t.slice(0, eq)).replace(/[^a-zA-Z0-9_-]/g, "")
+            const value = this.cleanCookieValue(t.slice(eq + 1))
+            if (!name || !value) continue
+            kept.push(`${name}=${value}`)
+        }
+        return kept.join("; ")
+    }
+
+    private customUa(): string {
+        try {
+            return ($getUserPreference("user-agent") || "").trim()
+        } catch (err) {
+            return ""
+        }
+    }
+
+    // Builds request headers, forwarding user-supplied CF cookies and
+    // applying the user's User-Agent when set.
+    private buildHeaders(referer: string): Record<string, string> {
+        const h: Record<string, string> = { Referer: referer }
+        const ua = this.customUa()
+        if (ua) h["User-Agent"] = ua
+        const cf = this.cfCookies()
+        if (cf) h["Cookie"] = cf
+        return h
+    }
+
+    private isCfBlock(status: number, body: string): boolean {
+        if (status === 403) return true
+        if (!body) return false
+        return body.indexOf("Just a moment") !== -1 || body.indexOf("cf-turnstile") !== -1 || body.indexOf("challenges.cloudflare.com") !== -1
+    }
+
     // Scrapes the torrent page to get the magnet link.
     async getTorrentMagnetLink(torrent: AnimeTorrent): Promise<string> {
         if (torrent.magnetLink) return torrent.magnetLink
         try {
-            const res = await fetch(torrent.link, { headers: { Referer: `${this.api}/` } })
+            const res = await fetch(torrent.link, { headers: this.buildHeaders(`${this.api}/`) })
             if (!res.ok) return ""
-            const $ = LoadDoc(res.text())
+            const text = res.text()
+            if (this.isCfBlock(res.status, text)) {
+                console.error("1337x: Cloudflare challenge blocked the torrent page — update the cf-cookie/user-agent settings with fresh values")
+                return ""
+            }
+            const $ = LoadDoc(text)
             const magnet = $("a[href^='magnet:']").first().attr("href")
             return magnet || ""
         } catch (err) {
@@ -220,9 +312,11 @@ class Provider {
     // Latest torrents from the recent page.
     async getLatest(): Promise<AnimeTorrent[]> {
         try {
-            const res = await fetch(`${this.api}/recent/`, { headers: { Referer: `${this.api}/` } })
+            const res = await fetch(`${this.api}/recent/`, { headers: this.buildHeaders(`${this.api}/`) })
             if (!res.ok) return []
-            const $ = LoadDoc(res.text())
+            const text = res.text()
+            if (this.isCfBlock(res.status, text)) return []
+            const $ = LoadDoc(text)
             const ret: AnimeTorrent[] = []
             $("table tbody tr").each((_, el) => {
                 const t = this.toAnimeTorrent(el)
