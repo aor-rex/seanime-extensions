@@ -1,7 +1,7 @@
 {
   "id": "ext",
   "name": "EXT Torrents",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EXT/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
@@ -9,5 +9,23 @@
   "author": "aor-rex",
   "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EXT/icon.png",
   "lang": "en",
-  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EXT/main.ts"
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/EXT/main.ts",
+  "userConfig": {
+    "version": 1,
+    "requiresConfig": false,
+    "fields": [
+      {
+        "name": "cf-cookie",
+        "label": "Cloudflare cookie (cf_clearance value or full Cookie header for extto.com)",
+        "type": "text",
+        "default": ""
+      },
+      {
+        "name": "user-agent",
+        "label": "Browser User-Agent used when solving the challenge (required, must match)",
+        "type": "text",
+        "default": ""
+      }
+    ]
+  }
 }

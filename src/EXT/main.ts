@@ -379,14 +379,81 @@ class Provider {
         return { size, seeders, leechers, date }
     }
 
+    // Cloudflare bypass: user pastes either a bare cf_clearance value or a
+    // full Cookie header copied from DevTools. The clearance is UA-bound, so
+    // the solving browser's exact User-Agent must be sent verbatim too.
+    // Returns the CF cookie pairs (PHPSESSID excluded, the live one is used).
+    private cfCookies(): string {
+        let raw = ""
+        try {
+            raw = ($getUserPreference("cf-cookie") || "").trim()
+        } catch (err) {
+            raw = ""
+        }
+        if (!raw) return ""
+        if (raw.indexOf("=") === -1) {
+            // Bare value -> treat as cf_clearance.
+            return raw ? `cf_clearance=${raw}` : ""
+        }
+        const pairs = raw.split(";")
+        const kept: string[] = []
+        for (const p of pairs) {
+            const t = p.trim()
+            if (!t) continue
+            const eq = t.indexOf("=")
+            if (eq === -1) continue
+            const name = t.slice(0, eq).trim()
+            if (!name) continue
+            if (name.toLowerCase() === "phpsessid") continue
+            kept.push(`${name}=${t.slice(eq + 1).trim()}`)
+        }
+        return kept.join("; ")
+    }
+
+    private customUa(): string {
+        try {
+            return ($getUserPreference("user-agent") || "").trim()
+        } catch (err) {
+            return ""
+        }
+    }
+
+    // Builds request headers, merging user-supplied CF cookies with EXT's own
+    // PHPSESSID session cookie and applying the user's User-Agent when set.
+    private buildHeaders(referer: string, session?: string): Record<string, string> {
+        const h: Record<string, string> = { Referer: referer }
+        const ua = this.customUa()
+        if (ua) h["User-Agent"] = ua
+        const parts: string[] = []
+        const cf = this.cfCookies()
+        if (cf) parts.push(cf)
+        if (session) parts.push(`PHPSESSID=${session}`)
+        if (parts.length > 0) h["Cookie"] = parts.join("; ")
+        return h
+    }
+
+    private isCfBlock(status: number, body: string): boolean {
+        if (status === 403) return true
+        if (!body) return false
+        return body.indexOf("Just a moment") !== -1 || body.indexOf("cf-turnstile") !== -1 || body.indexOf("challenges.cloudflare.com") !== -1
+    }
+
     private async scrape(query: string, category: string): Promise<AnimeTorrent[]> {
         const url = `${this.api}/browse/?q=${encodeURIComponent(query)}&cat=${category}&page_size=100`
         try {
             const res = await fetch(url, {
-                headers: { Referer: `${this.api}/` },
+                headers: this.buildHeaders(`${this.api}/`),
             })
-            if (!res.ok) return []
-            const $ = LoadDoc(res.text())
+            if (!res.ok) {
+                if (res.status === 403) console.error("EXT: Cloudflare challenge blocked the request (403) — update the cf-cookie/user-agent settings with fresh values")
+                return []
+            }
+            const text = res.text()
+            if (this.isCfBlock(res.status, text)) {
+                console.error("EXT: Cloudflare challenge page received — update the cf-cookie/user-agent settings with fresh values")
+                return []
+            }
+            const $ = LoadDoc(text)
             const ret: AnimeTorrent[] = []
             $("table.search-table tbody tr").each((_, el) => {
                 const t = this.toAnimeTorrent(el)
@@ -526,7 +593,7 @@ class Provider {
     private async initSession(): Promise<string> {
         try {
             const sessRes = await fetch(`${this.api}/`, {
-                headers: { Referer: `${this.api}/` },
+                headers: this.buildHeaders(`${this.api}/`),
             })
             if (!sessRes.ok) return ""
             return sessRes.cookies?.PHPSESSID || ""
@@ -543,10 +610,14 @@ class Provider {
             if (!id || !session) return ""
 
             const res = await fetch(torrent.link, {
-                headers: { Referer: `${this.api}/`, Cookie: `PHPSESSID=${session}` },
+                headers: this.buildHeaders(`${this.api}/`, session),
             })
             if (!res.ok) return ""
             const html = res.text()
+            if (this.isCfBlock(res.status, html)) {
+                console.error("EXT: Cloudflare challenge blocked the detail page — update the cf-cookie/user-agent settings with fresh values")
+                return ""
+            }
 
             const pageToken = (html.match(/window\.pageToken\s*=\s*'([^']+)'/) || [])[1] || ""
             const csrfToken = (html.match(/window\.csrfToken\s*=\s*'([^']+)'/) || [])[1] || ""
@@ -558,12 +629,12 @@ class Provider {
 
             const post = await fetch(`${this.api}/ajax/getTorrentMagnet.php`, {
                 method: "POST",
-                headers: {
-                    Referer: torrent.link,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "X-Requested-With": "XMLHttpRequest",
-                    Cookie: `PHPSESSID=${session}`,
-                },
+                headers: (() => {
+                    const h = this.buildHeaders(torrent.link, session) as Record<string, string>
+                    h["Content-Type"] = "application/x-www-form-urlencoded"
+                    h["X-Requested-With"] = "XMLHttpRequest"
+                    return h
+                })(),
                 body: body,
             })
             if (!post.ok) return ""
@@ -622,10 +693,12 @@ class Provider {
     async getLatest(): Promise<AnimeTorrent[]> {
         try {
             const res = await fetch(`${this.api}/`, {
-                headers: { Referer: `${this.api}/` },
+                headers: this.buildHeaders(`${this.api}/`),
             })
             if (!res.ok) return []
-            const $ = LoadDoc(res.text())
+            const text = res.text()
+            if (this.isCfBlock(res.status, text)) return []
+            const $ = LoadDoc(text)
             const ret: AnimeTorrent[] = []
             $("div#torrents-day-1 table tbody tr").each((_, el) => {
                 const t = this.toLatestAnimeTorrent(el)
