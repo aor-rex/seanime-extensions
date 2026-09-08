@@ -125,6 +125,17 @@ class Provider {
         return $scannerUtils.getSignificantTokens(tokens.join(" "))
     }
 
+    // Part-number words ("Dune Part One", "Dune Part 2", "Dune II"): they
+    // describe which installment a release is, so they neither prove nor
+    // disprove a match and must not count as "foreign" title tokens.
+    // (Single "i"/"v"/"x" are excluded as ambiguous.)
+    private isPartWord(t: string): boolean {
+        if (/^(one|two|three|four|five|six|seven|eight|nine|ten)$/i.test(t)) return true
+        if (/^(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|1st|2nd|3rd|[4-9]th|10th)$/i.test(t)) return true
+        if (/^(ii|iii|iv|vi|vii|viii|ix)$/i.test(t)) return true
+        return false
+    }
+
     // True when the torrent name actually belongs to the searched media.
     private belongsTo(name: string, aliases: Set<string>, isMovie: boolean, expectedSeason: number, mediaYear: number): boolean {
         const norm = $scannerUtils.normalizeTitle(name)
@@ -136,7 +147,7 @@ class Provider {
             const boundaryIdx = toks.findIndex((t) => this.isYearToken(t) || this.isTechToken(t))
             const stem = boundaryIdx === -1 ? toks : toks.slice(0, boundaryIdx)
             const foreign = this.significantTokens(stem).filter(
-                (t) => !aliases.has(t) && !this.isTechToken(t) && !this.isYearToken(t),
+                (t) => !aliases.has(t) && !this.isTechToken(t) && !this.isYearToken(t) && !this.isPartWord(t),
             )
             if (foreign.length > 0) return false
             if (nameYear > 0 && mediaYear > 0 && Math.abs(nameYear - mediaYear) > 1) return false
@@ -148,7 +159,7 @@ class Provider {
 
         const boundaryIdx = toks.findIndex((t) => this.isBoundaryToken(t))
         const stem = boundaryIdx === -1 ? toks : toks.slice(0, boundaryIdx)
-        const foreign = this.significantTokens(stem).filter((t) => !aliases.has(t) && !this.isTechToken(t))
+        const foreign = this.significantTokens(stem).filter((t) => !aliases.has(t) && !this.isTechToken(t) && !this.isPartWord(t))
         if (foreign.length > 0) return false
 
         if (expectedSeason > 0) {
@@ -284,8 +295,7 @@ class Provider {
         }
     }
 
-    private async scrape(query: string, category: string): Promise<AnimeTorrent[]> {
-        const searchUrl = `${this.api}/search/${encodeURIComponent(query)}/${category}/1/-seeders`
+    private async scrapePage(query: string, category: string, page: number, searchUrl: string): Promise<AnimeTorrent[]> {
         try {
             const res = await fetch(searchUrl, {
                 headers: { Referer: `${this.api}/` },
@@ -301,6 +311,29 @@ class Provider {
         } catch (err) {
             return []
         }
+    }
+
+    // Fetches the first pages of relevance-ranked results (Knaben's default
+    // ordering — no sort suffix), deduped by info hash. Stops early on an
+    // empty page or when a page yields no new hashes.
+    private async scrape(query: string, category: string): Promise<AnimeTorrent[]> {
+        const seen = new Set<string>()
+        const ret: AnimeTorrent[] = []
+        for (let page = 1; page <= 3; page++) {
+            const searchUrl = `${this.api}/search/${encodeURIComponent(query)}/${category}/${page}/`
+            const rows = await this.scrapePage(query, category, page, searchUrl)
+            if (rows.length === 0) break
+            let added = 0
+            for (const t of rows) {
+                const key = (t.infoHash || t.magnetLink || t.name).toLowerCase()
+                if (seen.has(key)) continue
+                seen.add(key)
+                ret.push(t)
+                added++
+            }
+            if (added === 0) break
+        }
+        return ret
     }
 
     // ------------------------------------------------------------------ API
