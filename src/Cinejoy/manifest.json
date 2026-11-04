@@ -1,0 +1,33 @@
+{
+  "id": "cinejoy",
+  "name": "Cinejoy",
+  "version": "0.2.0",
+  "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Cinejoy/manifest.json",
+  "language": "typescript",
+  "type": "onlinestream-provider",
+  "description": "Streams movies and series from cinejoy.pk (https://cinejoy.pk/). Title matching via TMDB (uses the site's own public key by default; override optional). Anime resolves best-effort through the TV path.",
+  "author": "aor-rex",
+  "icon": "https://cinejoy.pk/favicon.ico",
+  "website": "https://github.com/aor-rex/seanime-extensions",
+  "lang": "multi",
+  "payloadURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Cinejoy/main.ts",
+  "isDevelopment": false,
+  "userConfig": {
+    "requiresConfig": true,
+    "version": 1,
+    "fields": [
+        {
+          "name": "tmdb-api-key",
+          "label": "TMDB API key override (optional — the site's own public key is used by default)",
+          "type": "text",
+          "default": ""
+        },
+      {
+        "name": "base-url",
+        "label": "Cinejoy base URL (default https://cinejoy.pk)",
+        "type": "text",
+        "default": "https://cinejoy.pk"
+      }
+    ]
+  }
+}
