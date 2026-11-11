@@ -946,6 +946,7 @@ class Provider {
 
             const streams = await this.fetchForMedia(ids, media, ep)
             let torrents = streams.map(s => this.streamToTorrent(s, !!(ids.kitsuId || ids.imdbId)))
+            const unfiltered = torrents
 
             if (!movieOrSingle && opts.batch) {
                 torrents = torrents.filter(t => t.isBatch)
@@ -967,6 +968,15 @@ class Provider {
 
             if (opts.resolution) {
                 torrents = torrents.filter(t => resolutionMatches(t.resolution || "", opts.resolution))
+            }
+
+            // Fail-safe: if the smart-search filters emptied the list but the
+            // upstream query DID return streams, show the unfiltered list
+            // instead of nothing (over-aggressive batch detection or a filter
+            // mismatch should never zero out a search).
+            if (torrents.length === 0 && unfiltered.length > 0) {
+                console.log("Torrentio: smart search filters removed all results — falling back to unfiltered list")
+                torrents = unfiltered
             }
 
             if (!movieOrSingle) {
