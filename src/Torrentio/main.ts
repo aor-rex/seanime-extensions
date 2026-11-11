@@ -128,26 +128,37 @@ function dedupeByHash(list: AnimeTorrent[]): AnimeTorrent[] {
 // fileIdx, so summing distinct file sizes equals the torrent total.
 
 // Detect the season range encoded in a pack title: "S01-S07", "S1-S2",
-// "Season 1-4" -> {1,7}. Single-season: "S03", "Season 3" -> {3,3}.
-// Returns null when no season info is found.
+// "Season 1-4", "Seasons 1-3", "S1.S2.S3", "Season 1-2-3", "Season 1 & 2",
+// "S01 to S07" -> {1,7}. Single-season: "S03", "Season 3" -> {3,3}.
+// Returns null when no season info is found. The S/Season marker must be
+// preceded by a separator (or string start) so "Episodes 1-13" or the
+// trailing "s" of "Revengers" is never mistaken for a season marker.
 function parseSeasonRange(title: string): { start: number; end: number } | null {
     const t = title || ""
-    const range = t.match(/\b(?:S|Season)\s*\d{1,2}\s*[-–—~]\s*S?\s*\d{1,2}\b/i)
-    if (range) {
-        const parts = range[0].match(/\d{1,2}/g)
-        if (parts && parts.length >= 2) {
-            const start = parseInt(parts[0], 10)
-            const end = parseInt(parts[1], 10)
+    // "(?:seasons?|s) N" must be preceded by a separator (or string start) so
+    // the trailing "s" of "Revengers" or "Episodes" is never a season marker.
+    // A number immediately followed by "E<digit>" is an episode marker
+    // ("S01E05"), not a season — excluded via lookahead.
+    const pre = "(?:^|[\\s_.,|:—–-])(?:seasons?|s)\\s*s?\\s*"
+    const num = "(\\d{1,2})(?![\\dEe])"
+    const sep = "\\s*(?:[-–—~.&+]|to)\\s*(?:seasons?)?\\s*(?:s)?\\s*"
+    const multi = t.match(new RegExp(pre + num + "((?:" + sep + num + ")*)", "ig"))
+    if (multi) {
+        // Collect every number inside all matched markers, take min/max.
+        const nums: number[] = []
+        const token = new RegExp("(\\d{1,2})", "g")
+        let m: RegExpExecArray | null
+        while ((m = token.exec(multi[0])) !== null) nums.push(parseInt(m[1], 10))
+        if (nums.length >= 2) {
+            const start = Math.min.apply(null, nums)
+            const end = Math.max.apply(null, nums)
             if (end >= start) return { start: start, end: end }
         }
     }
-    const single = t.match(/\bS\d{1,2}\b/) || t.match(/\bSeason\s+\d{1,2}\b/i)
+    const single = t.match(new RegExp(pre + num, "i"))
     if (single) {
-        const num = single[0].match(/\d{1,2}/)
-        if (num) {
-            const v = parseInt(num[0], 10)
-            return { start: v, end: v }
-        }
+        const v = parseInt(single[1], 10)
+        if (!isNaN(v)) return { start: v, end: v }
     }
     return null
 }
@@ -365,22 +376,14 @@ class Provider {
     // resolution fails. Parses "Season N" / "S2" / "— Season 2" suffixes out
     // of the query so multi-season series resolve to the right season.
     private async resolveQueryToIds(query: string): Promise<ResolvedIds> {
+        const parsed = this.parseQueryTitle(query)
         const q = (query || "").trim()
         if (!q) return {}
         const key = this.tmdbKey()
         if (!key) return {}
 
-        // Strip season markers: "Season 2", "S02", "— Season 2", "Season 02"
-        let base = q
-        let season = 0
-        const seasonMatch = q.match(/[\s—–-]+(?:season|s)\s*(\d{1,2})\s*$/i)
-            || q.match(/\bseason\s*(\d{1,2})\b/i)
-        if (seasonMatch) {
-            season = parseInt(seasonMatch[1], 10)
-            base = q.slice(0, seasonMatch.index).trim() || q
-        }
-        base = base.replace(/[\s—–-]+$/, "").trim()
-        if (!base) base = q
+        const base = parsed.base
+        const season = parsed.season
 
         // Try TV first (multi-season series are the common case), then movie.
         const types: Array<"tv" | "movie"> = ["tv", "movie"]
@@ -431,6 +434,62 @@ class Provider {
     private tmdbKey(): string {
         const userKey = ($getUserPreference("torrentioTmdbApiKey") || "").trim()
         return userKey || EMBEDDED_TMDB_KEY
+    }
+
+    // Splits a query into base title + season number. Handles every common
+    // written form, with any separator (space, hyphen, dot, underscore,
+    // em/en dash, colon):
+    //   "Title Season 2"      "Title - Season 2"    "Title: Season 2"
+    //   "Title S02"           "Title-S02"           "title-season-2"
+    //   "Title season.2"      "Title_Season_2"
+    //   "Title 2nd Season"    "Title 3rd Season"    "Title II" (roman)
+    //   "Title Season Two"    "Title Second Season" (word numbers/ordinals)
+    // Returns season 0 when no marker is present.
+    private parseQueryTitle(query: string): { base: string; season: number } {
+        const q = (query || "").trim()
+        if (!q) return { base: "", season: 0 }
+
+        // The marker must be preceded by a separator (or string start) so the
+        // trailing "s" of words like "Revengers" is never mistaken for "S2".
+        const PRE = "(?:^|[\\s_.,|:—–-])"
+        const POST = "[\\s_.,|:—–-]*$"
+        const pats: Array<{ re: RegExp; kind: string; grp: number }> = [
+            { re: new RegExp(PRE + "seasons?" + "([\\s_.,|:—–-]*)" + "(\\d{1,2})" + POST, "i"), kind: "num", grp: 3 },
+            { re: new RegExp(PRE + "(\\d{1,2})(?:st|nd|rd|th)" + "([\\s_.,|:—–-]*)" + "seasons?" + POST, "i"), kind: "num", grp: 2 },
+            { re: new RegExp(PRE + "seasons?" + "([\\s_.,|:—–-]*)" + "(one|two|three|four|five|six|seven|eight|nine|ten)" + POST, "i"), kind: "word", grp: 3 },
+            { re: new RegExp(PRE + "(first|second|third|fourth|fifth)" + "([\\s_.,|:—–-]*)" + "seasons?" + POST, "i"), kind: "wordord", grp: 2 },
+            { re: new RegExp(PRE + "s" + "([\\s_.,|:—–-]*)" + "(\\d{1,2})" + POST, "i"), kind: "num", grp: 3 },
+            { re: new RegExp(PRE + "(ii|iii|iv|v|vi|vii|viii|ix|x|xi|xii)" + POST, "i"), kind: "roman", grp: 2 },
+        ]
+
+        const wordToNum: { [k: string]: number } = {
+            one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+            eight: 8, nine: 9, ten: 10,
+            first: 1, second: 2, third: 3, fourth: 4, fifth: 5,
+        }
+        const romanToNum: { [k: string]: number } = {
+            ii: 2, iii: 3, iv: 4, v: 5, vi: 6, vii: 7, viii: 8, ix: 9, x: 10, xi: 11, xii: 12,
+        }
+
+        for (const p of pats) {
+            const m = q.match(p.re)
+            if (!m || m.index === undefined) continue
+            let season = 0
+            const val = m[p.grp - 1]
+            if (p.kind === "roman") season = romanToNum[(val || "").toLowerCase()] || 0
+            else if (p.kind === "word" || p.kind === "wordord") season = wordToNum[(val || "").toLowerCase()] || 0
+            else season = parseInt(val, 10) || 0
+            if (season <= 0) continue
+            // Strip the marker (and the preceding separator char, if any).
+            let base = q.slice(0, m.index)
+            if (base && /[\s_.,|:—–-]/.test(base.charAt(base.length - 1))) {
+                base = base.slice(0, base.length - 1)
+            }
+            base = base.trim()
+            if (!base) continue
+            return { base: base, season: season }
+        }
+        return { base: q, season: 0 }
     }
 
     // Map a TMDB ID to an IMDb ID. Prefers TMDB external_ids (one fast call)
@@ -824,7 +883,31 @@ class Provider {
                 t.formattedSize = "≈ " + formatSizeBytes(estimated)
             } else {
                 t.size = searchedSeasonTotal
-                t.formattedSize = ""
+                // Exact total for the searched season: no "≈", but the UI
+                // displays formattedSize, so it must still be populated.
+                t.formattedSize = formatSizeBytes(searchedSeasonTotal)
+            }
+        }
+
+        // Name-twin fallback: the same pack is often uploaded more than once
+        // (different hash), and the scan sometimes only finds sizes for one
+        // copy. Copy the known total onto its size-less twin, marked as an
+        // estimate.
+        const sizeByName: { [k: string]: number } = {}
+        for (const h of hashes) {
+            const t = nfo[h]
+            if (!t.size) continue
+            const key = (t.name || "").toLowerCase().replace(/\s+/g, " ").trim()
+            if (key && !sizeByName[key]) sizeByName[key] = t.size
+        }
+        for (const h of hashes) {
+            const t = nfo[h]
+            if (t.size || t.formattedSize) continue
+            const key = (t.name || "").toLowerCase().replace(/\s+/g, " ").trim()
+            const twin = key ? sizeByName[key] : 0
+            if (twin) {
+                t.size = twin
+                t.formattedSize = "≈ " + formatSizeBytes(twin)
             }
         }
     }

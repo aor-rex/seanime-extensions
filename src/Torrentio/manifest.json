@@ -1,7 +1,7 @@
 {
   "id": "torrentiov2",
   "name": "Torrentio V2",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
@@ -19,10 +19,22 @@
         "label": "Sorting",
         "default": "quality",
         "options": [
-          { "label": "By quality then seeders", "value": "quality" },
-          { "label": "By quality then size", "value": "qualitysize" },
-          { "label": "By seeders", "value": "seeders" },
-          { "label": "By size", "value": "size" }
+          {
+            "label": "By quality then seeders",
+            "value": "quality"
+          },
+          {
+            "label": "By quality then size",
+            "value": "qualitysize"
+          },
+          {
+            "label": "By seeders",
+            "value": "seeders"
+          },
+          {
+            "label": "By size",
+            "value": "size"
+          }
         ]
       },
       {
@@ -55,27 +67,54 @@
         "label": "Providers (comma separated, empty = all, e.g. 1337x, nyaasi, thepiratebay)",
         "default": ""
       },
-        {
-          "type": "text",
-          "name": "torrentioTmdbApiKey",
-          "label": "TMDB API Key (optional; overrides the built-in key used for title-based IMDb fallback)",
-          "default": ""
-        },
+      {
+        "type": "text",
+        "name": "torrentioTmdbApiKey",
+        "label": "TMDB API Key (optional; overrides the built-in key used for title-based IMDb fallback)",
+        "default": ""
+      },
       {
         "type": "select",
         "name": "torrentioDebrid",
         "label": "Debrid Provider",
         "default": "none",
         "options": [
-          { "label": "None", "value": "none" },
-          { "label": "RealDebrid", "value": "realdebrid" },
-          { "label": "Premiumize", "value": "premiumize" },
-          { "label": "AllDebrid", "value": "alldebrid" },
-          { "label": "DebridLink", "value": "debridlink" },
-          { "label": "EasyDebrid", "value": "easydebrid" },
-          { "label": "OffCloud", "value": "offcloud" },
-          { "label": "TorBox", "value": "torbox" },
-          { "label": "Putio", "value": "putio" }
+          {
+            "label": "None",
+            "value": "none"
+          },
+          {
+            "label": "RealDebrid",
+            "value": "realdebrid"
+          },
+          {
+            "label": "Premiumize",
+            "value": "premiumize"
+          },
+          {
+            "label": "AllDebrid",
+            "value": "alldebrid"
+          },
+          {
+            "label": "DebridLink",
+            "value": "debridlink"
+          },
+          {
+            "label": "EasyDebrid",
+            "value": "easydebrid"
+          },
+          {
+            "label": "OffCloud",
+            "value": "offcloud"
+          },
+          {
+            "label": "TorBox",
+            "value": "torbox"
+          },
+          {
+            "label": "Putio",
+            "value": "putio"
+          }
         ]
       },
       {
