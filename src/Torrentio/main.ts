@@ -7,6 +7,13 @@ const YUNA_API = "https://relations.yuna.moe/api/ids"
 const WIKIDATA_SPARQL = "https://query.wikidata.org/sparql"
 const TMDB_API = "https://api.themoviedb.org/3"
 
+// Public TMDB v3 key used as the default so the query-based fallback works
+// with zero configuration (user key overrides it). Query-based resolution is
+// what makes free-text searches of non-AniList series ("Marvel's Daredevil")
+// return results: Seanime sends an empty media for those, so there are no
+// titles to match with unless the query itself is used.
+const EMBEDDED_TMDB_KEY = "8476a7ab80ad76f0936744df0430e67c"
+
 interface TorrentioStream {
     name: string
     title: string
@@ -21,6 +28,9 @@ interface ResolvedIds {
     imdbId?: string
     malId?: number
     tmdbSeason?: number
+    // Set by the query-based fallback (media is empty then, so format can't
+    // be read from it). Drives the movie-vs-series endpoint choice.
+    isMovie?: boolean
 }
 
 function parseSizeToBytes(text: string): number {
@@ -349,10 +359,84 @@ class Provider {
         return resolved
     }
 
-    // Map a TMDB ID to an IMDb ID. Prefers TMDB external_ids (one fast call,
-    // needs a key) and falls back to Wikidata (free, keyless).
+    // Resolves a free-text query to a TMDB/IMDb entry. Used when the media is
+    // empty (Seanime sends no media for free-text searches of titles that
+    // aren't on AniList, e.g. "Marvel's Daredevil") or when media-based
+    // resolution fails. Parses "Season N" / "S2" / "— Season 2" suffixes out
+    // of the query so multi-season series resolve to the right season.
+    private async resolveQueryToIds(query: string): Promise<ResolvedIds> {
+        const q = (query || "").trim()
+        if (!q) return {}
+        const key = this.tmdbKey()
+        if (!key) return {}
+
+        // Strip season markers: "Season 2", "S02", "— Season 2", "Season 02"
+        let base = q
+        let season = 0
+        const seasonMatch = q.match(/[\s—–-]+(?:season|s)\s*(\d{1,2})\s*$/i)
+            || q.match(/\bseason\s*(\d{1,2})\b/i)
+        if (seasonMatch) {
+            season = parseInt(seasonMatch[1], 10)
+            base = q.slice(0, seasonMatch.index).trim() || q
+        }
+        base = base.replace(/[\s—–-]+$/, "").trim()
+        if (!base) base = q
+
+        // Try TV first (multi-season series are the common case), then movie.
+        const types: Array<"tv" | "movie"> = ["tv", "movie"]
+        for (const type of types) {
+            let url = TMDB_API + "/search/" + type + "?api_key=" + encodeURIComponent(key) +
+                "&language=en-US&query=" + encodeURIComponent(base)
+            try {
+                const res = await fetch(url, { timeout: 8 })
+                if (!res.ok) continue
+                const data = res.json<any>()
+                const results = (data && Array.isArray(data.results)) ? data.results : []
+                if (results.length === 0) continue
+
+                // Rank: exact title match > title contains query > popularity.
+                const ql = base.toLowerCase()
+                let best = results[0]
+                let bestScore = -1
+                for (let j = 0; j < results.length; j++) {
+                    const r = results[j]
+                    const hitTitle = ((r && (r.name || r.title)) || "").toLowerCase()
+                    let score = 0
+                    if (hitTitle === ql) score += 4
+                    else if (hitTitle.indexOf(ql) !== -1) score += 2
+                    else if (ql.indexOf(hitTitle) !== -1 && hitTitle.length > 2) score += 1
+                    if (score > bestScore) { bestScore = score; best = r }
+                }
+                if (!best || !best.id) continue
+
+                const extUrl = TMDB_API + "/" + type + "/" + best.id +
+                    "/external_ids?api_key=" + encodeURIComponent(key)
+                const extRes = await fetch(extUrl, { timeout: 8 })
+                if (!extRes.ok) continue
+                const ext = extRes.json<any>()
+                if (!ext || !ext.imdb_id) continue
+
+                const out: ResolvedIds = { imdbId: ext.imdb_id }
+                if (type === "tv") out.tmdbSeason = season > 0 ? season : 1
+                else out.isMovie = true
+                return out
+            } catch (e) {
+                console.error("Torrentio: query TMDB search failed: " + errMsg(e))
+            }
+        }
+        return {}
+    }
+
+    // Effective TMDB key: user preference if set, else the embedded public key.
+    private tmdbKey(): string {
+        const userKey = ($getUserPreference("torrentioTmdbApiKey") || "").trim()
+        return userKey || EMBEDDED_TMDB_KEY
+    }
+
+    // Map a TMDB ID to an IMDb ID. Prefers TMDB external_ids (one fast call)
+    // and falls back to Wikidata (free, keyless).
     private async tmdbIdToImdb(tmdbId: number, isMovie: boolean): Promise<string> {
-        const key = ($getUserPreference("torrentioTmdbApiKey") || "").trim()
+        const key = this.tmdbKey()
         if (key) {
             try {
                 const type = isMovie ? "movie" : "tv"
@@ -373,10 +457,9 @@ class Provider {
     }
 
     // Title-based TMDB fallback used when ARM/YUNA and the encoded-ID path all
-    // fail to resolve a media. Requires an optional torrentioTmdbApiKey.
-    // Returns {} (with no IMDb id) when no key is set or nothing matches.
+    // fail to resolve a media. Returns {} (with no IMDb id) when nothing matches.
     private async resolveViaTmdb(media: Media): Promise<ResolvedIds> {
-        const key = ($getUserPreference("torrentioTmdbApiKey") || "").trim()
+        const key = this.tmdbKey()
         if (!key) return {}
 
         const isMovie = media.format === "MOVIE"
@@ -558,12 +641,16 @@ class Provider {
         return (data && data.streams) ? data.streams : []
     }
 
-    private isMovieOrSingle(media: Media): boolean {
-        return media.format === "MOVIE" || media.episodeCount === 1
+    private isMovieOrSingle(media: Media, ids?: ResolvedIds): boolean {
+        if (media.format === "MOVIE") return true
+        if (ids && ids.isMovie) return true
+        // Empty media (free-text search of a non-AniList title): only the
+        // resolved ids know the type. Default to series so episodes resolve.
+        return media.episodeCount === 1
     }
 
     private async fetchForMedia(ids: ResolvedIds, media: Media, ep: number): Promise<TorrentioStream[]> {
-        const movieOrSingle = this.isMovieOrSingle(media)
+        const movieOrSingle = this.isMovieOrSingle(media, ids)
         if (ids.kitsuId) {
             if (movieOrSingle) {
                 const [movie, series] = await Promise.all([
@@ -745,10 +832,16 @@ class Provider {
     async search(opts: AnimeSearchOptions): Promise<AnimeTorrent[]> {
         try {
             const media = opts.media
-            const ids = await this.resolveIds(media)
+            let ids = await this.resolveIds(media)
+            // Free-text search fallback: when the media is empty or unresolvable
+            // (titles not on AniList, e.g. "Marvel's Daredevil"), resolve the
+            // query text itself to an IMDb entry.
+            if (!ids.kitsuId && !ids.imdbId && opts.query && opts.query.trim()) {
+                ids = await this.resolveQueryToIds(opts.query)
+            }
             const streams = await this.fetchForMedia(ids, media, 1)
             const torrents = dedupeByHash(streams.map(s => this.streamToTorrent(s, !!(ids.kitsuId || ids.imdbId))))
-            if (!this.isMovieOrSingle(media)) {
+            if (!this.isMovieOrSingle(media, ids)) {
                 await this.estimateBatchSizes(torrents, ids, media, streams)
             }
             return torrents
@@ -761,8 +854,11 @@ class Provider {
     async smartSearch(opts: AnimeSmartSearchOptions): Promise<AnimeTorrent[]> {
         try {
             const media = opts.media
-            const ids = await this.resolveIds(media)
-            const movieOrSingle = this.isMovieOrSingle(media)
+            let ids = await this.resolveIds(media)
+            if (!ids.kitsuId && !ids.imdbId && opts.query && opts.query.trim()) {
+                ids = await this.resolveQueryToIds(opts.query)
+            }
+            const movieOrSingle = this.isMovieOrSingle(media, ids)
             const ep = opts.episodeNumber > 0 ? opts.episodeNumber : 1
 
             const streams = await this.fetchForMedia(ids, media, ep)

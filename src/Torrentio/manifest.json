@@ -1,11 +1,11 @@
 {
   "id": "torrentiov2",
   "name": "Torrentio V2",
-  "version": "2.2.4",
+  "version": "2.3.0",
   "manifestURI": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/manifest.json",
   "language": "typescript",
   "type": "anime-torrent-provider",
-  "description": "Uses Torrentio to find anime torrents. Supports TMDB custom-source media via IMDb resolution.",
+  "description": "Uses Torrentio to find anime torrents. Supports TMDB custom-source media via IMDb resolution, and free-text searches of non-AniList series (e.g. Marvel's Daredevil) via a query-based TMDB fallback.",
   "author": "aor-rex",
   "icon": "https://raw.githubusercontent.com/aor-rex/seanime-extensions/master/src/Torrentio/icon.png",
   "lang": "multi",
@@ -55,12 +55,12 @@
         "label": "Providers (comma separated, empty = all, e.g. 1337x, nyaasi, thepiratebay)",
         "default": ""
       },
-      {
-        "type": "text",
-        "name": "torrentioTmdbApiKey",
-        "label": "TMDB API Key (optional; enables title-based IMDb fallback for new series)",
-        "default": ""
-      },
+        {
+          "type": "text",
+          "name": "torrentioTmdbApiKey",
+          "label": "TMDB API Key (optional; overrides the built-in key used for title-based IMDb fallback)",
+          "default": ""
+        },
       {
         "type": "select",
         "name": "torrentioDebrid",
